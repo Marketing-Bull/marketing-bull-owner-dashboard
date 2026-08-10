@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import { PwaRegister } from "@/components/pwa-register";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -15,7 +16,20 @@ const ibmPlexMono = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "Marketing Bull Owner Dashboard",
-  description: "Single-screen daily command center for Alex."
+  description: "Single-screen daily command center for Alex.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Owner Dashboard"
+  }
+};
+
+export const viewport: Viewport = {
+  themeColor: "#123227",
+  colorScheme: "light",
+  width: "device-width",
+  initialScale: 1
 };
 
 export default function RootLayout({
@@ -25,7 +39,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${spaceGrotesk.variable} ${ibmPlexMono.variable}`}>{children}</body>
+      <body className={`${spaceGrotesk.variable} ${ibmPlexMono.variable}`}>
+        <PwaRegister />
+        {children}
+      </body>
     </html>
   );
 }

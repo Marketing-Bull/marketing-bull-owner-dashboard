@@ -1,7 +1,57 @@
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { NextResponse } from "next/server";
 import { buildSampleCalendarEvents } from "@/lib/sample-data";
+import type { CalendarEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+const execFileAsync = promisify(execFile);
+
+type GogEvent = {
+  id?: string;
+  summary?: string;
+  htmlLink?: string;
+  location?: string;
+  start?: { dateTime?: string; date?: string };
+  end?: { dateTime?: string; date?: string };
+};
+
+function parseEventDate(value?: { dateTime?: string; date?: string }): number {
+  if (!value) return 0;
+  if (value.dateTime) return new Date(value.dateTime).getTime();
+  if (value.date) return new Date(value.date).getTime();
+  return 0;
+}
+
+function normalizeGogEvents(items: GogEvent[]): CalendarEvent[] {
+  return items
+    .map((event) => {
+      const startMs = parseEventDate(event.start);
+      const endMs = parseEventDate(event.end) || startMs + 30 * 60 * 1000;
+      return {
+        id: event.id || `${startMs}-${event.summary || "event"}`,
+        title: event.summary || "(No title)",
+        startMs,
+        endMs,
+        allDay: Boolean(event.start?.date && !event.start?.dateTime),
+        calendarName: "Google Calendar",
+        location: event.location || undefined,
+        href: event.htmlLink || undefined
+      };
+    })
+    .filter((event) => Number.isFinite(event.startMs) && event.startMs > 0)
+    .sort((a, b) => a.startMs - b.startMs);
+}
+
+async function loadLocalCalendarFallback(): Promise<CalendarEvent[]> {
+  const raw = await readFile(join(homedir(), ".openclaw", "ui", "calendar-events.json"), "utf8");
+  const data = JSON.parse(raw) as { events?: CalendarEvent[] };
+  return Array.isArray(data.events) ? data.events : [];
+}
 
 export async function GET() {
   const upstream = process.env.OWNER_DASHBOARD_CALENDAR_URL?.trim();
@@ -20,7 +70,7 @@ export async function GET() {
         );
       }
       return NextResponse.json(
-        { upcomingEvents: Array.isArray(json?.upcomingEvents) ? json.upcomingEvents : [] },
+        { upcomingEvents: Array.isArray(json?.upcomingEvents) ? json.upcomingEvents : [], source: "upstream" },
         { headers: { "Cache-Control": "no-store" } }
       );
     } catch (error) {
@@ -31,8 +81,31 @@ export async function GET() {
     }
   }
 
-  return NextResponse.json(
-    { upcomingEvents: buildSampleCalendarEvents() },
-    { headers: { "Cache-Control": "no-store" } }
-  );
+  try {
+    const account = process.env.OWNER_DASHBOARD_CALENDAR_ACCOUNT?.trim() || "alex@getmarketingbull.com";
+    const gogPath = join(homedir(), ".local", "bin", "gog");
+    const { stdout } = await execFileAsync(
+      gogPath,
+      ["calendar", "events", "primary", "--account", account, "--json", "--no-input", "--days=5", "--max=60"],
+      { timeout: 15_000 }
+    );
+    const parsed = JSON.parse(stdout) as { events?: GogEvent[]; items?: GogEvent[] };
+    const items = Array.isArray(parsed.events) ? parsed.events : Array.isArray(parsed.items) ? parsed.items : [];
+    return NextResponse.json(
+      { upcomingEvents: normalizeGogEvents(items), source: "gog" },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  } catch {
+    try {
+      return NextResponse.json(
+        { upcomingEvents: await loadLocalCalendarFallback(), source: "local-store" },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    } catch {
+      return NextResponse.json(
+        { upcomingEvents: buildSampleCalendarEvents(), source: "sample" },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    }
+  }
 }

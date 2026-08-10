@@ -11,6 +11,22 @@ export type ManualState = {
     projected: string;
     momDelta: string;
   };
+  hyperfocus: {
+    lens: string;
+    target: string;
+    why: string;
+    bottleneck: string;
+    subtract: [string, string, string];
+    divide: {
+      morning: string;
+      midday: string;
+      afternoon: string;
+    };
+    multiply: {
+      streakDays: string;
+      dailyWin: string;
+    };
+  };
   goals: [string, string, string];
   phoneCalls: {
     toMake: PhoneCallItem[];
@@ -26,11 +42,15 @@ export type CalendarEvent = {
   endMs: number;
   allDay: boolean;
   calendarName: string;
+  location?: string;
+  href?: string;
 };
 
 export type ClickUpProject = {
   id: string;
   title: string;
+  subtitle?: string;
+  status?: string;
   href?: string;
 };
 
@@ -48,6 +68,7 @@ export type HoursEntry = {
 export type UpNextTask = {
   id: string;
   title: string;
+  subtitle?: string;
   due: string;
   priority: "P0" | "P1" | "P2" | "P3";
   done: boolean;
@@ -61,4 +82,6 @@ export type DashboardData = {
     month: HoursEntry[];
   };
   upNext: UpNextTask[];
+  source?: "live" | "sample";
+  generatedAt?: number;
 };
