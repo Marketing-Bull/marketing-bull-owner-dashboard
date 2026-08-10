@@ -89,7 +89,8 @@ function normalizeUpNext(value: unknown): UpNextTask[] {
       due: asString(item.due, "No due date"),
       priority: asPriority(item.priority),
       done: Boolean(item.done),
-      href: asOptionalString(item.href)
+      href: asOptionalString(item.href),
+      listId: asOptionalString(item.listId)
     };
   });
 }

@@ -28,6 +28,9 @@ The app has 3 data layers:
   - `What's Important`
   - widget layout/order and which panels are collapsed
 
+Ticking an `Up Next` checkbox writes the task's status back to ClickUp, so the
+change lives in ClickUp rather than in the page.
+
 3. `UI/runtime layer`
 - Drag-and-drop widget ordering
 - Collapsible panels (including the Daily Hyperfocus System), persisted server-side
@@ -100,6 +103,16 @@ http://localhost:3018/api/state` — 401 means it is on.
 - Falls back to sample data only if live fetch fails, and always reports why: the failure is logged server-side and returned as `fallbackReason`, which the UI shows as a "these numbers are not real" banner
 - Proxied and live payloads are both normalized, so a drifting upstream cannot crash the page
 - `Up Next` is currently ranked against the saved `lens`, `target`, and `bottleneck`, with due date and priority still influencing ranking
+
+### `PATCH /api/tasks/{taskId}`
+- Body: `{ "done": boolean, "listId": string }`
+- Writes an `Up Next` checkbox back to ClickUp as a task status change
+- Status names are per-list, so the list's own statuses are read first and a
+  status of type `closed`/`done` (or `open` when unchecking) is chosen. If the
+  list has none, the request fails with 422 and the task is left untouched
+  rather than being moved to a guessed status
+- Never falls back to a no-op: a write that quietly does nothing would leave the
+  checkbox claiming a task is closed while ClickUp still has it open
 
 ### `GET /api/calendar`
 - If `OWNER_DASHBOARD_CALENDAR_URL` is set, proxies that upstream endpoint
@@ -176,6 +189,9 @@ bugs that actually shipped rather than at coverage for its own sake:
 - `auth.test.ts` — the access-control decision matrix. With a token set, any
   case starting to allow a request without credentials is a data leak.
 - `dashboard-layout.test.ts` — the collapsible-panel id set.
+- `dashboard-save.test.ts` — the autosave decision, in both directions.
+- `clickup.test.ts` — status selection for the write-back, weighted toward the
+  refusal cases, since guessing a status would move a real task.
 
 ## Production / Current Live Host
 
@@ -197,7 +213,9 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 - `src/app/error.tsx`
 - `src/proxy.ts`
 - `src/lib/auth.ts`
+- `src/app/api/tasks/[taskId]/route.ts`
 - `src/lib/calendar-days.ts`
+- `src/lib/clickup.ts`
 - `src/lib/dashboard-data.ts`
 - `src/lib/dashboard-layout.ts`
 - `src/lib/dashboard-state.ts`
@@ -208,7 +226,6 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 ## What Still Needs Improvement
 
 - `Up Next` ranking is better, but still heuristic-driven
-- no ClickUp write-back yet; `Up Next` checkboxes still reset on refresh
 - no deeper history/streak reporting yet
 - service worker caching is intentionally light
 - install UX is still basic; no explicit install button yet

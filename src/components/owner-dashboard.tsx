@@ -232,6 +232,7 @@ export function OwnerDashboard() {
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [calendarFallbackReason, setCalendarFallbackReason] = useState<string | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
+  const [taskError, setTaskError] = useState<string | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [loadingCalendar, setLoadingCalendar] = useState(true);
   const [loadingState, setLoadingState] = useState(true);
@@ -426,6 +427,48 @@ export function OwnerDashboard() {
     if (!pending) return;
 
     await saveDashboardState(pending.manual, pending.widgetOrder, pending.collapsed);
+  }
+
+  function setTaskDone(taskId: string, done: boolean) {
+    setDashboardData((current) =>
+      current
+        ? {
+            ...current,
+            upNext: current.upNext.map((entry) => (entry.id === taskId ? { ...entry, done } : entry))
+          }
+        : current
+    );
+  }
+
+  /**
+   * Ticking a task closes it in ClickUp.
+   *
+   * The box moves immediately so it feels responsive, but a failed write puts
+   * it back and says why: a checkbox that stays ticked while ClickUp still has
+   * the task open is worse than one that never moved.
+   */
+  async function toggleTaskDone(task: UpNextTask) {
+    const nextDone = !task.done;
+    setTaskDone(task.id, nextDone);
+    setTaskError(null);
+
+    try {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ done: nextDone, listId: task.listId })
+      });
+      if (redirectedToLogin(response)) return;
+      const json = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(json?.error || `ClickUp update failed (${response.status})`);
+      }
+    } catch (error) {
+      setTaskDone(task.id, task.done);
+      setTaskError(
+        `${task.title}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
   function toggleCollapsed(id: CollapsibleId) {
@@ -788,16 +831,7 @@ export function OwnerDashboard() {
                   type="checkbox"
                   checked={task.done}
                   onChange={() =>
-                    setDashboardData((current) =>
-                      current
-                        ? {
-                            ...current,
-                            upNext: current.upNext.map((entry) =>
-                              entry.id === task.id ? { ...entry, done: !entry.done } : entry
-                            )
-                          }
-                        : current
-                    )
+                    void toggleTaskDone(task)
                   }
                 />
                 <div>
@@ -1021,6 +1055,7 @@ export function OwnerDashboard() {
         </div>
 
         {stateError ? <p className={styles.error}>{stateError}</p> : null}
+        {taskError ? <p className={styles.error}>{taskError}</p> : null}
 
         {fallbackNotices.length > 0 ? (
           <div className={styles.fallbackNotice} role="status">

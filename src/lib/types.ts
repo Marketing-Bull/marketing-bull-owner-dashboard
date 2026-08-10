@@ -73,6 +73,8 @@ export type UpNextTask = {
   priority: "P0" | "P1" | "P2" | "P3";
   done: boolean;
   href?: string;
+  /** ClickUp list the task belongs to; needed to resolve its status names. */
+  listId?: string;
 };
 
 export type DashboardData = {
