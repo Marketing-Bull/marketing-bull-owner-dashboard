@@ -1,0 +1,500 @@
+.page {
+  min-height: 100vh;
+  padding: 32px 24px 56px;
+}
+
+.shell {
+  max-width: 1480px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(2.3rem, 5vw, 4.5rem);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+  max-width: 10ch;
+}
+
+.subtitle {
+  margin: 14px 0 0;
+  max-width: 56rem;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.headerActions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.button {
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 11px 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+.pill {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.75);
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.card {
+  background: var(--panel);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.cardHeader {
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(31, 41, 55, 0.06);
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.cardEyebrow {
+  margin: 0 0 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: 18px;
+}
+
+.cardBody {
+  padding: 18px 20px 20px;
+}
+
+.badge {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  border: 1px solid rgba(217, 119, 6, 0.22);
+  color: #92400e;
+  background: rgba(254, 243, 199, 0.88);
+}
+
+.priorityGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.priorityCell,
+.miniPanel,
+.taskRow,
+.goalRow,
+.openIdea,
+.dayColumn,
+.callColumn {
+  background: var(--panel-soft);
+  border: 1px solid rgba(31, 41, 55, 0.08);
+  border-radius: 22px;
+}
+
+.priorityCell {
+  padding: 14px;
+}
+
+.priorityHead,
+.rowBetween {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.priorityKey {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.tinyUpper {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+}
+
+.stack {
+  display: grid;
+  gap: 8px;
+}
+
+.chip {
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid rgba(31, 41, 55, 0.07);
+}
+
+.metric {
+  font-size: 52px;
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.06em;
+  margin: 0;
+}
+
+.inputs2 {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.field,
+.fieldCompact {
+  display: grid;
+  gap: 6px;
+}
+
+.fieldLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--muted);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(31, 41, 55, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  padding: 12px 14px;
+  color: var(--text);
+}
+
+.input:focus,
+.textarea:focus {
+  outline: 2px solid rgba(15, 118, 110, 0.18);
+  border-color: rgba(15, 118, 110, 0.4);
+}
+
+.highlight {
+  margin-top: 18px;
+  border-radius: 24px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.12), rgba(255, 255, 255, 0.7));
+  padding: 16px;
+}
+
+.highlightMetric {
+  font-size: 40px;
+  margin: 8px 0 4px;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.hoursToggle {
+  display: inline-flex;
+  padding: 4px;
+  gap: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(31, 41, 55, 0.1);
+}
+
+.toggleButton {
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.toggleActive {
+  background: var(--text);
+  color: white;
+}
+
+.barRow {
+  display: grid;
+  gap: 6px;
+}
+
+.barTrack {
+  height: 12px;
+  background: rgba(31, 41, 55, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0f766e 0%, #34d399 100%);
+}
+
+.calendarGrid,
+.callsGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.callsGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dayColumn,
+.callColumn {
+  padding: 14px;
+}
+
+.eventCard,
+.callItem {
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(31, 41, 55, 0.08);
+  padding: 12px;
+}
+
+.timeTag {
+  font-size: 11px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+}
+
+.eventTitle {
+  margin: 6px 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.eventMeta,
+.helpText,
+.callMeta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.goalRow,
+.taskRow {
+  padding: 12px 14px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.goalIndex {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--text);
+  color: white;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.goalInput {
+  border: 0;
+  background: transparent;
+  width: 100%;
+  padding: 2px 0 0;
+}
+
+.goalInput:focus {
+  outline: none;
+}
+
+.taskRow {
+  cursor: pointer;
+}
+
+.taskCheckbox {
+  margin-top: 3px;
+}
+
+.taskTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.taskDone {
+  opacity: 0.56;
+  text-decoration: line-through;
+}
+
+.taskMetaLine {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.priorityBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.p0 {
+  color: #9f1239;
+  background: rgba(255, 228, 230, 0.92);
+}
+
+.p1 {
+  color: #92400e;
+  background: rgba(254, 243, 199, 0.92);
+}
+
+.p2 {
+  color: #075985;
+  background: rgba(224, 242, 254, 0.92);
+}
+
+.p3 {
+  color: #44403c;
+  background: rgba(245, 245, 244, 0.96);
+}
+
+.focusPanel {
+  border-radius: 28px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.16), rgba(255, 255, 255, 0.78));
+  padding: 18px;
+}
+
+.focusText {
+  width: 100%;
+  min-height: 180px;
+  border: 0;
+  background: transparent;
+  resize: vertical;
+  font-size: 20px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.focusText:focus {
+  outline: none;
+}
+
+.openIdea {
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.loader,
+.error,
+.empty {
+  padding: 22px 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.error {
+  color: var(--danger);
+}
+
+@media (max-width: 1180px) {
+  .grid,
+  .calendarGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .page {
+    padding: 22px 16px 40px;
+  }
+
+  .header {
+    flex-direction: column;
+  }
+
+  .headerActions {
+    align-items: flex-start;
+  }
+
+  .grid,
+  .priorityGrid,
+  .calendarGrid,
+  .callsGrid,
+  .inputs2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
