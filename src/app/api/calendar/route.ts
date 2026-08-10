@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { NextResponse } from "next/server";
+import { reportFallback } from "@/lib/fallback";
 import { buildSampleCalendarEvents } from "@/lib/sample-data";
 import type { CalendarEvent } from "@/lib/types";
 
@@ -23,7 +24,16 @@ type GogEvent = {
 function parseEventDate(value?: { dateTime?: string; date?: string }): number {
   if (!value) return 0;
   if (value.dateTime) return new Date(value.dateTime).getTime();
-  if (value.date) return new Date(value.date).getTime();
+  if (value.date) {
+    // An all-day "2026-08-10" parses as UTC midnight via the Date constructor,
+    // which is the previous local day west of UTC. Build it as local midnight
+    // so it groups under the day Google actually means.
+    const [year, month, day] = value.date.split("-").map(Number);
+    if ([year, month, day].every((part) => Number.isFinite(part))) {
+      return new Date(year, month - 1, day).getTime();
+    }
+    return new Date(value.date).getTime();
+  }
   return 0;
 }
 
@@ -95,15 +105,26 @@ export async function GET() {
       { upcomingEvents: normalizeGogEvents(items), source: "gog" },
       { headers: { "Cache-Control": "no-store" } }
     );
-  } catch {
+  } catch (gogError) {
+    const gogReason = reportFallback("/api/calendar (gog)", gogError);
+
     try {
       return NextResponse.json(
-        { upcomingEvents: await loadLocalCalendarFallback(), source: "local-store" },
+        {
+          upcomingEvents: await loadLocalCalendarFallback(),
+          source: "local-store",
+          fallbackReason: gogReason
+        },
         { headers: { "Cache-Control": "no-store" } }
       );
-    } catch {
+    } catch (localError) {
+      const localReason = reportFallback("/api/calendar (local store)", localError);
       return NextResponse.json(
-        { upcomingEvents: buildSampleCalendarEvents(), source: "sample" },
+        {
+          upcomingEvents: buildSampleCalendarEvents(),
+          source: "sample",
+          fallbackReason: `${gogReason}; local store: ${localReason}`
+        },
         { headers: { "Cache-Control": "no-store" } }
       );
     }

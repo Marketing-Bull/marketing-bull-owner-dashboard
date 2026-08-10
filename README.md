@@ -45,24 +45,54 @@ The page is structured around the 4-step daily operating system:
 
 This sits above the operational widgets so the dashboard is not just a reporting screen; it is meant to drive the day.
 
+## Access Control
+
+The dashboard holds MRR, projections, goals, and client phone numbers, and
+`/api/state` both reads and writes them. Access is gated in `src/proxy.ts`:
+
+| `OWNER_DASHBOARD_AUTH_TOKEN` | Behavior |
+| --- | --- |
+| unset | Only requests whose `Host` is `localhost` / `127.0.0.1` / `[::1]` are served. Everything else gets 401. |
+| set | Every page and API request needs the token, entered once at `/login` (stored in an httpOnly cookie) or sent as `Authorization: Bearer <token>`. |
+
+Scripted access:
+
+```bash
+curl -H "Authorization: Bearer $OWNER_DASHBOARD_AUTH_TOKEN" http://host:3018/api/state
+```
+
+`POST /api/login` exchanges the token for the session cookie; `DELETE /api/login`
+clears it.
+
+> **Heads up for the Tailscale host below:** it is reached by IP/MagicDNS name,
+> not `localhost`, so it now returns 401 until `OWNER_DASHBOARD_AUTH_TOKEN` is
+> set in that environment. Set it before the next deploy.
+
+The `Host` check backing the token-free local mode is a guard against accidental
+exposure, not against a determined attacker — `Host` can be forged. Set the token
+for anything beyond your own machine.
+
 ## Current API Behavior
 
 ### `GET /api/state`
 - Reads saved dashboard state from SQLite
+- Requires auth (see Access Control)
 
 ### `PUT /api/state`
 - Saves dashboard state back to SQLite
+- Requires auth (see Access Control)
 
 ### `GET /api/dashboard`
 - If `OWNER_DASHBOARD_DATA_URL` is set, proxies that upstream endpoint
-- Otherwise fetches live ClickUp data directly
-- Falls back to sample data only if live fetch fails
+- Otherwise fetches live ClickUp data directly (API key read from `~/.openclaw/secrets.json` → `env.CLICKUP_API_KEY`)
+- Falls back to sample data only if live fetch fails, and always reports why: the failure is logged server-side and returned as `fallbackReason`, which the UI shows as a "these numbers are not real" banner
+- Proxied and live payloads are both normalized, so a drifting upstream cannot crash the page
 - `Up Next` is currently ranked against the saved `lens`, `target`, and `bottleneck`, with due date and priority still influencing ranking
 
 ### `GET /api/calendar`
 - If `OWNER_DASHBOARD_CALENDAR_URL` is set, proxies that upstream endpoint
-- Otherwise pulls live Google Calendar data through local `gog`
-- Falls back to local/sample data only if live fetch fails
+- Otherwise pulls live Google Calendar data through local `gog` (`~/.local/bin/gog`)
+- Falls back to local/sample data only if live fetch fails, reporting `fallbackReason` the same way
 
 ## Current Persistence
 
@@ -103,7 +133,9 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. No token is needed on localhost; copy
+`.env.example` to `.env.local` and set `OWNER_DASHBOARD_AUTH_TOKEN` when you want
+to reach the dashboard from another device.
 
 ## Production / Current Live Host
 
@@ -121,7 +153,13 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 - `src/app/api/dashboard/route.ts`
 - `src/app/api/calendar/route.ts`
 - `src/app/api/state/route.ts`
+- `src/app/api/login/route.ts`
+- `src/app/error.tsx`
+- `src/proxy.ts`
+- `src/lib/auth.ts`
+- `src/lib/dashboard-data.ts`
 - `src/lib/dashboard-state.ts`
+- `src/lib/fallback.ts`
 - `src/lib/sample-data.ts`
 - `src/lib/types.ts`
 

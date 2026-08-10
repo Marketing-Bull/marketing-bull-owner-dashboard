@@ -633,6 +633,32 @@
   color: var(--danger);
 }
 
+.fallbackNotice {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border-radius: 22px;
+  border: 1px solid rgba(217, 119, 6, 0.28);
+  background: rgba(254, 243, 199, 0.7);
+  color: #7c3a06;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.fallbackIcon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.fallbackReason {
+  margin: 6px 0 0;
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  word-break: break-word;
+}
+
 .inlineLink,
 .inlineLinkText {
   color: var(--accent);

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
@@ -15,6 +16,7 @@ import {
   TrendingUp
 } from "lucide-react";
 import styles from "./owner-dashboard.module.css";
+import { normalizeDashboardData } from "@/lib/dashboard-data";
 import { DEFAULT_WIDGET_ORDER, type WidgetId } from "@/lib/dashboard-layout";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import type {
@@ -58,8 +60,32 @@ function formatDateCompact(timestamp: number): string {
   }).format(timestamp);
 }
 
+/**
+ * Local-calendar day key.
+ *
+ * This must not use toISOString(): that converts to UTC, so in any non-UTC zone
+ * a slice of the ISO string names the wrong day for part of every day. In
+ * UTC-4 an 8pm event landed in tomorrow's column; in UTC+2 the whole grid slid
+ * a day. Build the key from local components so it matches the local column.
+ */
 function dayKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * The proxy answers unauthenticated API calls with 401 JSON rather than the
+ * login page, so the client has to do the redirecting itself.
+ *
+ * Kept at module scope: it closes over no state, and declaring it inside the
+ * component would make every fetch callback reactive for exhaustive-deps.
+ */
+function redirectedToLogin(response: Response): boolean {
+  if (response.status !== 401) return false;
+  window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+  return true;
 }
 
 function createPhoneCallItem(): PhoneCallItem {
@@ -161,6 +187,7 @@ export function OwnerDashboard() {
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [calendarFallbackReason, setCalendarFallbackReason] = useState<string | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [loadingCalendar, setLoadingCalendar] = useState(true);
@@ -177,6 +204,7 @@ export function OwnerDashboard() {
     setStateError(null);
     try {
       const response = await fetch("/api/state", { cache: "no-store" });
+      if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json?.error || "State fetch failed");
@@ -204,6 +232,7 @@ export function OwnerDashboard() {
           widgetOrder: nextWidgetOrder
         })
       });
+      if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json?.error || "State save failed");
@@ -218,11 +247,14 @@ export function OwnerDashboard() {
     setDashboardError(null);
     try {
       const response = await fetch("/api/dashboard", { cache: "no-store" });
+      if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json?.error || "Dashboard fetch failed");
       }
-      setDashboardData(json as DashboardData);
+      // Normalize rather than cast: a proxied upstream can return any shape,
+      // and an undefined `hours` used to crash the entire page.
+      setDashboardData(normalizeDashboardData(json));
       setLastRefreshed(Date.now());
     } catch (error) {
       setDashboardError(error instanceof Error ? error.message : String(error));
@@ -235,11 +267,15 @@ export function OwnerDashboard() {
     setCalendarError(null);
     try {
       const response = await fetch("/api/calendar", { cache: "no-store" });
+      if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json?.error || "Calendar fetch failed");
       }
       setCalendarEvents(Array.isArray(json?.upcomingEvents) ? json.upcomingEvents : []);
+      setCalendarFallbackReason(
+        json?.source === "gog" || json?.source === "upstream" ? null : json?.fallbackReason || null
+      );
       setLastRefreshed(Date.now());
     } catch (error) {
       setCalendarError(error instanceof Error ? error.message : String(error));
@@ -299,6 +335,13 @@ export function OwnerDashboard() {
 
   const hoursEntries = dashboardData?.hours[hoursWindow] ?? [];
   const maxHours = Math.max(...hoursEntries.map((entry) => entry.hours), 1);
+
+  // Sample data that looks live is the failure mode worth shouting about, so
+  // collect every route that fell back and say why.
+  const fallbackNotices = [
+    dashboardData?.fallbackReason ? { scope: "ClickUp", reason: dashboardData.fallbackReason } : null,
+    calendarFallbackReason ? { scope: "Calendar", reason: calendarFallbackReason } : null
+  ].filter((notice): notice is { scope: string; reason: string } => notice !== null);
 
   const widgets: Record<WidgetId, React.ReactNode> = {
     projects: (
@@ -765,6 +808,20 @@ export function OwnerDashboard() {
         </div>
 
         {stateError ? <p className={styles.error}>{stateError}</p> : null}
+
+        {fallbackNotices.length > 0 ? (
+          <div className={styles.fallbackNotice} role="status">
+            <AlertTriangle size={16} className={styles.fallbackIcon} />
+            <div>
+              <strong>Showing sample data — these numbers are not real.</strong>
+              {fallbackNotices.map((notice) => (
+                <p key={notice.scope} className={styles.fallbackReason}>
+                  {notice.scope}: {notice.reason}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <Card title="Daily Hyperfocus System" eyebrow="Apply the 4 steps every day" className={styles.systemCard}>
           <div className={styles.systemGrid}>

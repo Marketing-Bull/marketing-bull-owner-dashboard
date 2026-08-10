@@ -84,4 +84,14 @@ export type DashboardData = {
   upNext: UpNextTask[];
   source?: "live" | "sample";
   generatedAt?: number;
+  /** Set when a route served sample data; explains what the live fetch hit. */
+  fallbackReason?: string;
+};
+
+export type CalendarSource = "upstream" | "gog" | "local-store" | "sample";
+
+export type CalendarResponse = {
+  upcomingEvents: CalendarEvent[];
+  source?: CalendarSource;
+  fallbackReason?: string;
 };
