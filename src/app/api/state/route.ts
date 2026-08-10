@@ -1,13 +1,19 @@
 import { NextResponse } from "next/server";
+import { isAuthConfigured } from "@/lib/auth";
 import { saveDashboardState, loadDashboardState } from "@/lib/dashboard-state";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    return NextResponse.json(loadDashboardState(), {
-      headers: { "Cache-Control": "no-store" }
-    });
+    // `authConfigured` lets the UI show that the dashboard is currently open,
+    // so an unprotected deployment is visible rather than silent.
+    return NextResponse.json(
+      { ...loadDashboardState(), authConfigured: isAuthConfigured() },
+      {
+        headers: { "Cache-Control": "no-store" }
+      }
+    );
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },

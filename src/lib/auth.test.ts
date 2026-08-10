@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { authorizeRequest, isLoopbackHost, isPublicPath, readBearerToken, tokensMatch } from "@/lib/auth";
+import { authorizeRequest, isAuthConfigured, isPublicPath, readBearerToken, tokensMatch } from "@/lib/auth";
 
 /**
  * Cover for the access rules protecting `/api/state`, which reads and writes
  * MRR, goals, and client phone numbers.
  *
- * The failure that matters is fail-open: any case below that starts returning
- * `allowed: true` when it should not is a data leak, so the negative cases are
- * the point of this file.
+ * With no token configured the dashboard is deliberately open, so the cases
+ * that matter here are the configured ones: any of them starting to return
+ * `allowed: true` without valid credentials is a data leak.
  */
 
 const originalToken = process.env.OWNER_DASHBOARD_AUTH_TOKEN;
@@ -44,65 +44,37 @@ describe("tokensMatch", () => {
   });
 });
 
-describe("isLoopbackHost", () => {
-  it("recognises loopback hosts with and without a port", () => {
-    for (const host of ["localhost", "localhost:3000", "127.0.0.1", "127.0.0.1:3018", "[::1]", "[::1]:3000"]) {
-      expect(isLoopbackHost(host), host).toBe(true);
-    }
-  });
-
-  it("rejects everything else, including the LAN and tunnel cases", () => {
-    for (const host of [
-      "192.168.1.5:3000",
-      "100.119.59.63:3018", // the Tailscale host this app is served from
-      "amb-ubuntu-01.tail7a2140.ts.net:3018",
-      "dashboard.example.com",
-      "localhost.evil.com", // must not match on prefix
-      "127.0.0.1.evil.com",
-      "",
-      null
-    ]) {
-      expect(isLoopbackHost(host), String(host)).toBe(false);
-    }
+describe("isAuthConfigured", () => {
+  it("reports whether a token is set, which is what the UI warns on", () => {
+    withToken(undefined);
+    expect(isAuthConfigured()).toBe(false);
+    withToken("   ");
+    expect(isAuthConfigured()).toBe(false);
+    withToken("s3cret");
+    expect(isAuthConfigured()).toBe(true);
   });
 });
 
 describe("authorizeRequest", () => {
   describe("with no token configured", () => {
-    it("serves loopback callers", () => {
+    it("lets every request through, since there is nothing to sign in with", () => {
       withToken(undefined);
       expect(
-        authorizeRequest({ host: "localhost:3000", cookieToken: undefined, bearerToken: undefined })
+        authorizeRequest({ cookieToken: undefined, bearerToken: undefined })
       ).toEqual({ allowed: true });
     });
 
-    it("refuses everyone else so private data cannot leak to a LAN or tunnel", () => {
-      withToken(undefined);
-      for (const host of ["192.168.1.5:3000", "100.119.59.63:3018", "dash.example.com", null]) {
-        expect(
-          authorizeRequest({ host, cookieToken: undefined, bearerToken: undefined }),
-          String(host)
-        ).toEqual({ allowed: false, reason: "local-only" });
-      }
-    });
-
-    it("ignores credentials supplied when none is configured", () => {
-      withToken(undefined);
-      expect(
-        authorizeRequest({ host: "dash.example.com", cookieToken: "anything", bearerToken: "anything" })
-      ).toEqual({ allowed: false, reason: "local-only" });
+    it("treats a whitespace-only token as unset", () => {
+      withToken("   ");
+      expect(authorizeRequest({ cookieToken: undefined, bearerToken: undefined }).allowed).toBe(true);
     });
   });
 
   describe("with a token configured", () => {
     it("accepts the cookie or the bearer header", () => {
       withToken("s3cret");
-      expect(
-        authorizeRequest({ host: "dash.example.com", cookieToken: "s3cret", bearerToken: undefined }).allowed
-      ).toBe(true);
-      expect(
-        authorizeRequest({ host: "dash.example.com", cookieToken: undefined, bearerToken: "s3cret" }).allowed
-      ).toBe(true);
+      expect(authorizeRequest({ cookieToken: "s3cret", bearerToken: undefined }).allowed).toBe(true);
+      expect(authorizeRequest({ cookieToken: undefined, bearerToken: "s3cret" }).allowed).toBe(true);
     });
 
     it("refuses missing or wrong credentials", () => {
@@ -113,25 +85,11 @@ describe("authorizeRequest", () => {
         { cookieToken: undefined, bearerToken: "wrong" },
         { cookieToken: "", bearerToken: "" }
       ]) {
-        expect(authorizeRequest({ host: "dash.example.com", ...credentials })).toEqual({
+        expect(authorizeRequest(credentials)).toEqual({
           allowed: false,
           reason: "invalid-credentials"
         });
       }
-    });
-
-    it("still requires the token on loopback, so local is not a bypass", () => {
-      withToken("s3cret");
-      expect(
-        authorizeRequest({ host: "localhost:3000", cookieToken: undefined, bearerToken: undefined }).allowed
-      ).toBe(false);
-    });
-
-    it("treats a whitespace-only configured token as unset", () => {
-      withToken("   ");
-      expect(
-        authorizeRequest({ host: "dash.example.com", cookieToken: undefined, bearerToken: undefined })
-      ).toEqual({ allowed: false, reason: "local-only" });
     });
   });
 });

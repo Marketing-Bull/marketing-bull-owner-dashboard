@@ -12,6 +12,7 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
+  ShieldAlert,
   Target,
   TrendingUp
 } from "lucide-react";
@@ -216,6 +217,9 @@ export function OwnerDashboard() {
   const [manual, setManual] = useState<ManualState>(DEFAULT_MANUAL_STATE);
   const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>([...DEFAULT_WIDGET_ORDER]);
   const [collapsed, setCollapsed] = useState<CollapsibleId[]>([]);
+  // Assume protected until the server says otherwise, so a failed state fetch
+  // never produces a false "unprotected" claim.
+  const [authConfigured, setAuthConfigured] = useState(true);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
@@ -251,6 +255,7 @@ export function OwnerDashboard() {
       setManual((json?.manual as ManualState) || DEFAULT_MANUAL_STATE);
       setWidgetOrder(Array.isArray(json?.widgetOrder) ? (json.widgetOrder as WidgetId[]) : [...DEFAULT_WIDGET_ORDER]);
       setCollapsed(Array.isArray(json?.collapsed) ? json.collapsed.filter(isCollapsibleId) : []);
+      setAuthConfigured(json?.authConfigured !== false);
       hasLoadedStateRef.current = true;
     } catch (error) {
       setStateError(error instanceof Error ? error.message : String(error));
@@ -873,6 +878,15 @@ export function OwnerDashboard() {
               <span className={styles.headerClock}>{clockLabel}</span>
               <span aria-hidden="true">·</span>
               <span>{refreshLabel}</span>
+              {authConfigured ? null : (
+                <span
+                  className={styles.unprotectedChip}
+                  title="No OWNER_DASHBOARD_AUTH_TOKEN is set, so anyone who can reach this address can read and edit this dashboard."
+                >
+                  <ShieldAlert size={13} />
+                  Unprotected
+                </span>
+              )}
             </p>
           </div>
           <div className={styles.headerActions}>

@@ -48,40 +48,51 @@ This sits above the operational widgets so the dashboard is not just a reporting
 
 ## Access Control
 
-The dashboard holds MRR, projections, goals, and client phone numbers, and
-`/api/state` both reads and writes them. Access is gated in `src/proxy.ts`:
+Access is gated in `src/proxy.ts`, but only when a token is configured:
 
 | `OWNER_DASHBOARD_AUTH_TOKEN` | Behavior |
 | --- | --- |
-| unset | Only requests whose `Host` is `localhost` / `127.0.0.1` / `[::1]` are served. Everything else gets 401. |
+| **unset (default)** | **The dashboard is open — anyone who can reach the address can read and edit it.** The header shows an "Unprotected" chip so this is visible rather than silent. |
 | set | Every page and API request needs the token, entered once at `/login` (stored in an httpOnly cookie) or sent as `Authorization: Bearer <token>`. |
 
-Scripted access:
+Unset is the default so the app runs with no configuration. That is fine on a
+laptop. It is not fine on anything reachable by other machines: this screen
+holds MRR, projections, goals, and client phone numbers, and `/api/state`
+accepts writes as well as reads.
+
+To protect it, set the variable and restart:
+
+```bash
+# in the project root; .env.local is gitignored
+echo 'OWNER_DASHBOARD_AUTH_TOKEN=<a long random string you choose>' >> .env.local
+```
+
+The token is a shared secret you invent — nothing issues it. Generate one with
+`openssl rand -base64 32`. Under systemd, put it in the unit
+(`Environment="OWNER_DASHBOARD_AUTH_TOKEN=..."`) instead, since `.env.local` is
+only picked up when the process runs from the project root. Under pm2, restart
+with `--update-env`.
+
+Scripted access once it is set:
 
 ```bash
 curl -H "Authorization: Bearer $OWNER_DASHBOARD_AUTH_TOKEN" http://host:3018/api/state
 ```
 
 `POST /api/login` exchanges the token for the session cookie; `DELETE /api/login`
-clears it.
-
-> **Heads up for the Tailscale host below:** it is reached by IP/MagicDNS name,
-> not `localhost`, so it now returns 401 until `OWNER_DASHBOARD_AUTH_TOKEN` is
-> set in that environment. Set it before the next deploy.
-
-The `Host` check backing the token-free local mode is a guard against accidental
-exposure, not against a determined attacker — `Host` can be forged. Set the token
-for anything beyond your own machine.
+clears it. Verify the gate is live with `curl -o /dev/null -w '%{http_code}'
+http://localhost:3018/api/state` — 401 means it is on.
 
 ## Current API Behavior
 
 ### `GET /api/state`
 - Reads saved dashboard state from SQLite
-- Requires auth (see Access Control)
+- Also returns `authConfigured`, which drives the header's "Unprotected" chip
+- Requires auth only when a token is configured (see Access Control)
 
 ### `PUT /api/state`
 - Saves dashboard state back to SQLite
-- Requires auth (see Access Control)
+- Requires auth only when a token is configured (see Access Control)
 
 ### `GET /api/dashboard`
 - If `OWNER_DASHBOARD_DATA_URL` is set, proxies that upstream endpoint
@@ -134,9 +145,10 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`. No token is needed on localhost; copy
-`.env.example` to `.env.local` and set `OWNER_DASHBOARD_AUTH_TOKEN` when you want
-to reach the dashboard from another device.
+Open `http://localhost:3000`. No token is needed — the dashboard is open by
+default. Copy `.env.example` to `.env.local` and set
+`OWNER_DASHBOARD_AUTH_TOKEN` before exposing it to anything beyond your own
+machine.
 
 Node >= 22.5 is required — `src/lib/dashboard-state.ts` uses `node:sqlite`.
 
@@ -161,8 +173,8 @@ bugs that actually shipped rather than at coverage for its own sake:
   is invisible when tested only in UTC.
 - `dashboard-data.test.ts` — payload normalization against malformed upstream
   responses, including the exact body that used to white-screen the dashboard.
-- `auth.test.ts` — the access-control decision matrix, weighted toward the
-  fail-open cases where a mistake would leak data.
+- `auth.test.ts` — the access-control decision matrix. With a token set, any
+  case starting to allow a request without credentials is a data leak.
 - `dashboard-layout.test.ts` — the collapsible-panel id set.
 
 ## Production / Current Live Host
@@ -203,3 +215,5 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 - ClickUp team/assignee IDs and the calendar account are hardcoded as source
   defaults; they should be env-only
 - tests cover the lib layer only; the React components are untested
+- the dashboard ships unprotected by default; `OWNER_DASHBOARD_AUTH_TOKEN` has
+  to be set deliberately before exposing it beyond localhost
