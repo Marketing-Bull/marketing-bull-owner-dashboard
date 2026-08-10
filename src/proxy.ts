@@ -8,7 +8,9 @@ import {
 } from "@/lib/auth";
 
 /**
- * Gates the dashboard and every private API route.
+ * Gates the dashboard and every private API route, but only when
+ * `OWNER_DASHBOARD_AUTH_TOKEN` is set. With no token configured every request
+ * passes through, so the app runs with zero configuration.
  *
  * Page requests are redirected to `/login`; API requests get a 401 so the
  * client surfaces a real error instead of rendering a login page as JSON.
@@ -23,7 +25,6 @@ export function proxy(request: NextRequest) {
   }
 
   const decision = authorizeRequest({
-    host: request.headers.get("host"),
     cookieToken: request.cookies.get(AUTH_COOKIE_NAME)?.value,
     bearerToken: readBearerToken(request.headers.get("authorization"))
   });
@@ -34,18 +35,9 @@ export function proxy(request: NextRequest) {
 
   if (pathname.startsWith("/api/")) {
     return NextResponse.json(
-      { error: authFailureMessage(decision.reason) },
+      { error: authFailureMessage() },
       { status: 401, headers: { "Cache-Control": "no-store" } }
     );
-  }
-
-  // Without a configured token there is nothing to log in with, so sending the
-  // browser to /login would loop. Explain the situation instead.
-  if (decision.reason === "local-only") {
-    return new NextResponse(authFailureMessage(decision.reason), {
-      status: 401,
-      headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" }
-    });
   }
 
   const loginUrl = new URL("/login", request.url);

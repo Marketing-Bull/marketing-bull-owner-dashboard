@@ -3,13 +3,18 @@
  *
  * The dashboard holds revenue figures, goals, and client phone numbers, and
  * `/api/state` both reads and writes them. Everything here is edge-safe so the
- * same helpers can run inside `middleware.ts` and inside route handlers.
+ * same helpers can run inside `proxy.ts` and inside route handlers.
  *
  * Access model:
  * - `OWNER_DASHBOARD_AUTH_TOKEN` set   -> every request needs the token.
- * - `OWNER_DASHBOARD_AUTH_TOKEN` unset -> only loopback requests are served, so
- *   `npm run dev` keeps working with no config but the app fails closed as soon
- *   as it is reachable from another device.
+ * - `OWNER_DASHBOARD_AUTH_TOKEN` unset -> the dashboard is open to anyone who
+ *   can reach it.
+ *
+ * The unset case is deliberately open so the app runs with no configuration.
+ * That means an unconfigured deployment serves revenue figures, goals, and
+ * client phone numbers to anything that can route to it — setting the token is
+ * what makes this safe to expose, and the UI flags the unprotected state so it
+ * cannot be forgotten silently.
  */
 
 export const AUTH_COOKIE_NAME = "owner_dashboard_auth";
@@ -28,7 +33,7 @@ const PUBLIC_PATHS = new Set([
   "/favicon.ico"
 ]);
 
-export type AuthFailure = "local-only" | "invalid-credentials";
+export type AuthFailure = "invalid-credentials";
 
 export type AuthDecision = { allowed: true } | { allowed: false; reason: AuthFailure };
 
@@ -36,23 +41,13 @@ export function getConfiguredToken(): string | null {
   return process.env.OWNER_DASHBOARD_AUTH_TOKEN?.trim() || null;
 }
 
-export function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.has(pathname);
+/** False means the dashboard is currently serving everyone, unauthenticated. */
+export function isAuthConfigured(): boolean {
+  return getConfiguredToken() !== null;
 }
 
-/**
- * Host-header check backing the token-free local mode.
- *
- * A hostile client can forge `Host`, so this is not a defence against a
- * determined attacker — it exists to stop the dashboard from serving private
- * data over a LAN, tunnel, or deployment where no token was configured. Set
- * `OWNER_DASHBOARD_AUTH_TOKEN` for anything beyond your own machine.
- */
-export function isLoopbackHost(host: string | null): boolean {
-  if (!host) return false;
-  const hostname = (host.startsWith("[") ? host.slice(0, host.indexOf("]") + 1) : host.split(":")[0])
-    .toLowerCase();
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+export function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATHS.has(pathname);
 }
 
 /** Length-independent comparison so token checks don't leak the token via timing. */
@@ -74,15 +69,14 @@ export function tokensMatch(candidate: string | undefined | null, expected: stri
  * `cookie` covers the browser session issued by `/api/login`.
  */
 export function authorizeRequest(input: {
-  host: string | null;
   cookieToken: string | undefined;
   bearerToken: string | undefined;
 }): AuthDecision {
   const expected = getConfiguredToken();
 
-  if (!expected) {
-    return isLoopbackHost(input.host) ? { allowed: true } : { allowed: false, reason: "local-only" };
-  }
+  // No token configured: the dashboard is open. Nothing to check against, and
+  // refusing here would lock out a deployment that has no way to sign in.
+  if (!expected) return { allowed: true };
 
   if (tokensMatch(input.cookieToken, expected) || tokensMatch(input.bearerToken, expected)) {
     return { allowed: true };
@@ -91,10 +85,8 @@ export function authorizeRequest(input: {
   return { allowed: false, reason: "invalid-credentials" };
 }
 
-export function authFailureMessage(reason: AuthFailure): string {
-  return reason === "local-only"
-    ? "This dashboard only serves localhost until OWNER_DASHBOARD_AUTH_TOKEN is set. Set it to reach the dashboard from another device."
-    : "Authentication required.";
+export function authFailureMessage(): string {
+  return "Authentication required.";
 }
 
 export function readBearerToken(authorizationHeader: string | null): string | undefined {
