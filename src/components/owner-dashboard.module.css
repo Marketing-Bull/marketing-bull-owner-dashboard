@@ -48,6 +48,14 @@
   font-weight: 500;
 }
 
+.saveStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
 .unprotectedChip {
   display: inline-flex;
   align-items: center;

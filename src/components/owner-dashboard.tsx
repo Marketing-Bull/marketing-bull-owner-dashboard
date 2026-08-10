@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import {
   AlertTriangle,
   ArrowUpRight,
+  Check,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -19,6 +20,11 @@ import {
 import styles from "./owner-dashboard.module.css";
 import { buildDayColumns } from "@/lib/calendar-days";
 import { normalizeDashboardData } from "@/lib/dashboard-data";
+import {
+  hasUnsavedChanges,
+  serializeState,
+  type DashboardStatePayload
+} from "@/lib/dashboard-save";
 import {
   DEFAULT_WIDGET_ORDER,
   HYPERFOCUS_PANEL_ID,
@@ -282,6 +288,7 @@ export function OwnerDashboard({ version }: { version: string }) {
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [calendarFallbackReason, setCalendarFallbackReason] = useState<string | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
+  const [taskError, setTaskError] = useState<string | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [loadingCalendar, setLoadingCalendar] = useState(true);
   const [loadingState, setLoadingState] = useState(true);
@@ -296,8 +303,17 @@ export function OwnerDashboard({ version }: { version: string }) {
     getServerMinuteSnapshot
   );
   const now = currentMinute === null ? null : currentMinute * MINUTE_MS;
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const hasLoadedStateRef = useRef(false);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirrors the latest edits so a pending save can be flushed on demand
+  // without waiting for the debounce to elapse.
+  const pendingSaveRef = useRef<DashboardStatePayload | null>(null);
+  // Serialized copy of what the server is known to hold. Loading state feeds
+  // the same values back into the effect below, which would otherwise write
+  // them straight back and report "Saved" before the user edited anything.
+  const savedSnapshotRef = useRef<string | null>(null);
 
   async function fetchDashboardState() {
     setStateError(null);
@@ -308,10 +324,21 @@ export function OwnerDashboard({ version }: { version: string }) {
       if (!response.ok) {
         throw new Error(json?.error || "State fetch failed");
       }
-      setManual((json?.manual as ManualState) || DEFAULT_MANUAL_STATE);
-      setWidgetOrder(Array.isArray(json?.widgetOrder) ? (json.widgetOrder as WidgetId[]) : [...DEFAULT_WIDGET_ORDER]);
-      setCollapsed(Array.isArray(json?.collapsed) ? json.collapsed.filter(isCollapsibleId) : []);
+      const loadedManual = (json?.manual as ManualState) || DEFAULT_MANUAL_STATE;
+      const loadedOrder = Array.isArray(json?.widgetOrder)
+        ? (json.widgetOrder as WidgetId[])
+        : [...DEFAULT_WIDGET_ORDER];
+      const loadedCollapsed = Array.isArray(json?.collapsed) ? json.collapsed.filter(isCollapsibleId) : [];
+
+      setManual(loadedManual);
+      setWidgetOrder(loadedOrder);
+      setCollapsed(loadedCollapsed);
       setAuthConfigured(json?.authConfigured !== false);
+      savedSnapshotRef.current = serializeState({
+        manual: loadedManual,
+        widgetOrder: loadedOrder,
+        collapsed: loadedCollapsed
+      });
       hasLoadedStateRef.current = true;
     } catch (error) {
       setStateError(error instanceof Error ? error.message : String(error));
@@ -326,6 +353,7 @@ export function OwnerDashboard({ version }: { version: string }) {
     nextWidgetOrder: WidgetId[],
     nextCollapsed: CollapsibleId[]
   ) {
+    setSaveStatus("saving");
     try {
       const response = await fetch("/api/state", {
         method: "PUT",
@@ -344,7 +372,17 @@ export function OwnerDashboard({ version }: { version: string }) {
         throw new Error(json?.error || "State save failed");
       }
       setStateError(null);
+      // The write landed, so nothing is outstanding for a flush to send.
+      pendingSaveRef.current = null;
+      savedSnapshotRef.current = serializeState({
+        manual: nextManual,
+        widgetOrder: nextWidgetOrder,
+        collapsed: nextCollapsed
+      });
+      setLastSavedAt(Date.now());
+      setSaveStatus("saved");
     } catch (error) {
+      setSaveStatus("idle");
       setStateError(error instanceof Error ? error.message : String(error));
     }
   }
@@ -406,7 +444,16 @@ export function OwnerDashboard({ version }: { version: string }) {
       clearTimeout(saveTimeoutRef.current);
     }
 
+    // Nothing actually changed (this run came from a load or a refresh), so
+    // there is nothing to write and nothing to announce.
+    if (!hasUnsavedChanges({ manual, widgetOrder, collapsed }, savedSnapshotRef.current)) return;
+
+    // Record what is owed before waiting out the debounce, so a refresh (or
+    // anything else that interrupts) can still flush it instead of dropping it.
+    pendingSaveRef.current = { manual, widgetOrder, collapsed };
+
     saveTimeoutRef.current = setTimeout(() => {
+      saveTimeoutRef.current = null;
       void saveDashboardState(manual, widgetOrder, collapsed);
     }, 350);
 
@@ -416,6 +463,69 @@ export function OwnerDashboard({ version }: { version: string }) {
       }
     };
   }, [loadingState, manual, widgetOrder, collapsed]);
+
+  /**
+   * Writes any debounced edit immediately.
+   *
+   * Refreshing used to discard in-flight edits: it set `loadingState`, which
+   * re-ran the effect above and cancelled the pending timer, and then the
+   * refetch overwrote the local value with the server's copy. Anyone who typed
+   * and hit Refresh to check whether it saved lost exactly what they were
+   * checking on.
+   */
+  async function flushPendingSave() {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+
+    const pending = pendingSaveRef.current;
+    if (!pending) return;
+
+    await saveDashboardState(pending.manual, pending.widgetOrder, pending.collapsed);
+  }
+
+  function setTaskDone(taskId: string, done: boolean) {
+    setDashboardData((current) =>
+      current
+        ? {
+            ...current,
+            upNext: current.upNext.map((entry) => (entry.id === taskId ? { ...entry, done } : entry))
+          }
+        : current
+    );
+  }
+
+  /**
+   * Ticking a task closes it in ClickUp.
+   *
+   * The box moves immediately so it feels responsive, but a failed write puts
+   * it back and says why: a checkbox that stays ticked while ClickUp still has
+   * the task open is worse than one that never moved.
+   */
+  async function toggleTaskDone(task: UpNextTask) {
+    const nextDone = !task.done;
+    setTaskDone(task.id, nextDone);
+    setTaskError(null);
+
+    try {
+      const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ done: nextDone, listId: task.listId })
+      });
+      if (redirectedToLogin(response)) return;
+      const json = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(json?.error || `ClickUp update failed (${response.status})`);
+      }
+    } catch (error) {
+      setTaskDone(task.id, task.done);
+      setTaskError(
+        `${task.title}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
 
   function toggleCollapsed(id: CollapsibleId) {
     setCollapsed((current) =>
@@ -435,7 +545,12 @@ export function OwnerDashboard({ version }: { version: string }) {
     setLoadingDashboard(true);
     setLoadingCalendar(true);
     setLoadingState(true);
-    void Promise.all([fetchDashboardState(), fetchDashboardData(), fetchCalendarData()]);
+    void (async () => {
+      // Persist unsaved edits first, or the state refetch below would overwrite
+      // them with the server's older copy.
+      await flushPendingSave();
+      await Promise.all([fetchDashboardState(), fetchDashboardData(), fetchCalendarData()]);
+    })();
   }
 
   // Local midnight, so the columns roll over for a dashboard left open
@@ -463,6 +578,15 @@ export function OwnerDashboard({ version }: { version: string }) {
     : lastRefreshed
       ? `Refreshed ${formatClock(lastRefreshed)}`
       : "Not refreshed yet";
+
+  // Nothing to report until the first save of the session; after that the label
+  // stays visible so "did that save?" always has an answer on screen.
+  const saveLabel =
+    saveStatus === "saving"
+      ? "Saving…"
+      : saveStatus === "saved" && lastSavedAt
+        ? `Saved ${formatClock(lastSavedAt)}`
+        : null;
 
   const p0Count = dashboardData?.priorities.find((bucket) => bucket.key === "P0")?.projects.length ?? 0;
   const weekHours = (dashboardData?.hours.week ?? []).reduce((total, entry) => total + entry.hours, 0);
@@ -789,16 +913,7 @@ export function OwnerDashboard({ version }: { version: string }) {
                   type="checkbox"
                   checked={task.done}
                   onChange={() =>
-                    setDashboardData((current) =>
-                      current
-                        ? {
-                            ...current,
-                            upNext: current.upNext.map((entry) =>
-                              entry.id === task.id ? { ...entry, done: !entry.done } : entry
-                            )
-                          }
-                        : current
-                    )
+                    void toggleTaskDone(task)
                   }
                 />
                 <div>
@@ -960,6 +1075,20 @@ export function OwnerDashboard({ version }: { version: string }) {
               <span className={styles.headerClock}>{clockLabel}</span>
               <span aria-hidden="true">·</span>
               <span>{refreshLabel}</span>
+              {saveLabel ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  {/* Edits autosave, so this is the only thing that tells you it worked. */}
+                  <span className={styles.saveStatus} role="status">
+                    {saveStatus === "saving" ? (
+                      <LoaderCircle size={13} className="spin" />
+                    ) : (
+                      <Check size={13} />
+                    )}
+                    {saveLabel}
+                  </span>
+                </>
+              ) : null}
               {authConfigured ? null : (
                 <span
                   className={styles.unprotectedChip}
@@ -1010,6 +1139,7 @@ export function OwnerDashboard({ version }: { version: string }) {
         </div>
 
         {stateError ? <p className={styles.error}>{stateError}</p> : null}
+        {taskError ? <p className={styles.error}>{taskError}</p> : null}
 
         {fallbackNotices.length > 0 ? (
           <div className={styles.fallbackNotice} role="status">

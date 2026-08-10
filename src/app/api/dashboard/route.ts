@@ -1,7 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { NextResponse } from "next/server";
+import { fetchClickUpJson, getClickUpApiKey } from "@/lib/clickup";
 import { normalizeDashboardData } from "@/lib/dashboard-data";
 import { loadDashboardState } from "@/lib/dashboard-state";
 import { reportFallback } from "@/lib/fallback";
@@ -9,12 +7,6 @@ import { SAMPLE_DASHBOARD_DATA } from "@/lib/sample-data";
 import type { DashboardData, HoursEntry, PriorityBucket, UpNextTask } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-type SecretsFile = {
-  env?: {
-    CLICKUP_API_KEY?: string;
-  };
-};
 
 type ClickUpTask = {
   id: string;
@@ -29,6 +21,7 @@ type ClickUpTask = {
     status?: string;
   };
   list?: {
+    id?: string;
     name?: string;
   };
   task_type?: string | null;
@@ -215,7 +208,8 @@ function buildUpNext(tasks: ClickUpTask[], context?: BottleneckContext): UpNextT
       due: formatDueLabel(task.due_date),
       priority: parsePriority(task),
       done: false,
-      href: task.url
+      href: task.url,
+      listId: task.list?.id
     }));
 }
 
@@ -241,27 +235,6 @@ function buildHours(entries: ClickUpTimeEntry[]): HoursEntry[] {
     .map(([label, hours]) => ({ label, hours: Number(hours.toFixed(1)) }))
     .sort((a, b) => b.hours - a.hours)
     .slice(0, 6);
-}
-
-async function getClickUpApiKey(): Promise<string | null> {
-  const raw = await readFile(join(homedir(), ".openclaw", "secrets.json"), "utf8");
-  const secrets = JSON.parse(raw) as SecretsFile;
-  return secrets.env?.CLICKUP_API_KEY?.trim() || null;
-}
-
-async function fetchClickUpJson<T>(path: string, params: URLSearchParams, apiKey: string): Promise<T> {
-  const url = `https://api.clickup.com/api/v2${path}?${params.toString()}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: apiKey,
-      Accept: "application/json"
-    },
-    cache: "no-store"
-  });
-  if (!response.ok) {
-    throw new Error(`ClickUp returned ${response.status}`);
-  }
-  return (await response.json()) as T;
 }
 
 export async function GET() {
