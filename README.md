@@ -137,6 +137,32 @@ Open `http://localhost:3000`. No token is needed on localhost; copy
 `.env.example` to `.env.local` and set `OWNER_DASHBOARD_AUTH_TOKEN` when you want
 to reach the dashboard from another device.
 
+Node >= 22.5 is required — `src/lib/dashboard-state.ts` uses `node:sqlite`.
+
+## Checks
+
+```bash
+npm run typecheck
+npm run lint
+npm test          # npm run test:watch while iterating
+npm run build
+```
+
+`.github/workflows/ci.yml` runs all four on every push to `main` and every pull
+request.
+
+Tests live next to what they cover (`src/lib/*.test.ts`) and are aimed at the
+bugs that actually shipped rather than at coverage for its own sake:
+
+- `calendar-days.test.ts` — day grouping across seven timezones. The suite sets
+  `TZ` per case, so it exercises `America/New_York`, `Europe/Berlin` and friends
+  even though CI runs in UTC. This matters: the original UTC-based grouping bug
+  is invisible when tested only in UTC.
+- `dashboard-data.test.ts` — payload normalization against malformed upstream
+  responses, including the exact body that used to white-screen the dashboard.
+- `auth.test.ts` — the access-control decision matrix, weighted toward the
+  fail-open cases where a mistake would leak data.
+
 ## Production / Current Live Host
 
 The current Tailscale-served instance has been run on:
@@ -166,7 +192,12 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 ## What Still Needs Improvement
 
 - `Up Next` ranking is better, but still heuristic-driven
-- no ClickUp write-back yet
+- no ClickUp write-back yet; `Up Next` checkboxes still reset on refresh
 - no deeper history/streak reporting yet
 - service worker caching is intentionally light
 - install UX is still basic; no explicit install button yet
+- ClickUp team/assignee IDs and the calendar account are hardcoded as source
+  defaults; they should be env-only
+- `saveDashboardState` updates `dashboard_state` outside the transaction that
+  wraps the phone-call rows, so a failure mid-save can leave a partial write
+- tests cover the lib layer only; the React components are untested

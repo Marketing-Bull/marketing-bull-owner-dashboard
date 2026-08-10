@@ -16,6 +16,7 @@ import {
   TrendingUp
 } from "lucide-react";
 import styles from "./owner-dashboard.module.css";
+import { buildDayColumns } from "@/lib/calendar-days";
 import { normalizeDashboardData } from "@/lib/dashboard-data";
 import { DEFAULT_WIDGET_ORDER, type WidgetId } from "@/lib/dashboard-layout";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
@@ -37,14 +38,6 @@ function formatMoney(value: string): string {
   }).format(numeric);
 }
 
-function formatDayLabel(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric"
-  }).format(date);
-}
-
 function formatEventTime(event: CalendarEvent): string {
   if (event.allDay) return "All day";
   return new Intl.DateTimeFormat("en-US", {
@@ -60,20 +53,8 @@ function formatDateCompact(timestamp: number): string {
   }).format(timestamp);
 }
 
-/**
- * Local-calendar day key.
- *
- * This must not use toISOString(): that converts to UTC, so in any non-UTC zone
- * a slice of the ISO string names the wrong day for part of every day. In
- * UTC-4 an 8pm event landed in tomorrow's column; in UTC+2 the whole grid slid
- * a day. Build the key from local components so it matches the local column.
- */
-function dayKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
+/** Days shown in the calendar widget: today plus the next two. */
+const CALENDAR_DAY_COUNT = 3;
 
 /**
  * The proxy answers unauthenticated API calls with 401 JSON rather than the
@@ -317,21 +298,7 @@ export function OwnerDashboard() {
     void Promise.all([fetchDashboardState(), fetchDashboardData(), fetchCalendarData()]);
   }
 
-  const groupedDays = useMemo(
-    () =>
-      Array.from({ length: 3 }, (_, offset) => {
-        const date = new Date();
-        date.setHours(0, 0, 0, 0);
-        date.setDate(date.getDate() + offset);
-        const key = dayKey(date);
-        return {
-          key,
-          label: formatDayLabel(date),
-          events: calendarEvents.filter((event) => dayKey(new Date(event.startMs)) === key)
-        };
-      }),
-    [calendarEvents]
-  );
+  const groupedDays = useMemo(() => buildDayColumns(calendarEvents, CALENDAR_DAY_COUNT), [calendarEvents]);
 
   const hoursEntries = dashboardData?.hours[hoursWindow] ?? [];
   const maxHours = Math.max(...hoursEntries.map((entry) => entry.hours), 1);
