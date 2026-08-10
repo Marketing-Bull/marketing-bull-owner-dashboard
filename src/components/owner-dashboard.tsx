@@ -1,21 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
+  AlertTriangle,
   ArrowUpRight,
   ChevronDown,
   ChevronUp,
+  Clock,
   ExternalLink,
   Grip,
   LoaderCircle,
   Plus,
   RefreshCw,
-  Sparkles,
   Target,
   TrendingUp
 } from "lucide-react";
 import styles from "./owner-dashboard.module.css";
-import { DEFAULT_WIDGET_ORDER, type WidgetId } from "@/lib/dashboard-layout";
+import { buildDayColumns } from "@/lib/calendar-days";
+import { normalizeDashboardData } from "@/lib/dashboard-data";
+import {
+  DEFAULT_WIDGET_ORDER,
+  HYPERFOCUS_PANEL_ID,
+  isCollapsibleId,
+  type CollapsibleId,
+  type WidgetId
+} from "@/lib/dashboard-layout";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import type {
   CalendarEvent,
@@ -35,12 +44,32 @@ function formatMoney(value: string): string {
   }).format(numeric);
 }
 
-function formatDayLabel(date: Date): string {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric"
-  }).format(date);
+/**
+ * Hydration-safe current minute.
+ *
+ * The server and the client can never agree on "now", so the server snapshot is
+ * null and the first client render matches it; the value appears after mount.
+ * The snapshot is the minute index rather than a raw timestamp so it stays
+ * stable between calls (React requires that) and re-renders at most once a
+ * minute even though the subscription polls more often.
+ */
+const MINUTE_MS = 60_000;
+
+function subscribeToMinute(onChange: () => void): () => void {
+  const interval = setInterval(onChange, 15_000);
+  return () => clearInterval(interval);
+}
+
+function getMinuteSnapshot(): number {
+  return Math.floor(Date.now() / MINUTE_MS);
+}
+
+function getServerMinuteSnapshot(): null {
+  return null;
+}
+
+function formatClock(timestamp: number): string {
+  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(timestamp);
 }
 
 function formatEventTime(event: CalendarEvent): string {
@@ -58,8 +87,20 @@ function formatDateCompact(timestamp: number): string {
   }).format(timestamp);
 }
 
-function dayKey(date: Date): string {
-  return date.toISOString().slice(0, 10);
+/** Days shown in the calendar widget: today plus the next two. */
+const CALENDAR_DAY_COUNT = 3;
+
+/**
+ * The proxy answers unauthenticated API calls with 401 JSON rather than the
+ * login page, so the client has to do the redirecting itself.
+ *
+ * Kept at module scope: it closes over no state, and declaring it inside the
+ * component would make every fetch callback reactive for exhaustive-deps.
+ */
+function redirectedToLogin(response: Response): boolean {
+  if (response.status !== 401) return false;
+  window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+  return true;
 }
 
 function createPhoneCallItem(): PhoneCallItem {
@@ -100,6 +141,8 @@ function Card({
   dragLabel,
   className,
   bodyClassName,
+  collapsed = false,
+  onToggleCollapse,
   children
 }: {
   title: string;
@@ -108,17 +151,32 @@ function Card({
   dragLabel?: string;
   className?: string;
   bodyClassName?: string;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <section className={`${styles.card} ${className || ""}`}>
+    <section className={`${styles.card} ${collapsed ? styles.cardCollapsed : ""} ${className || ""}`}>
       <div className={styles.cardHeader}>
         <div>
           <p className={styles.cardEyebrow}>{eyebrow}</p>
           <h2 className={styles.cardTitle}>{title}</h2>
         </div>
         <div className={styles.cardActions}>
-          {action}
+          {/* A collapsed card hides its own status chips along with the body. */}
+          {collapsed ? null : action}
+          {onToggleCollapse ? (
+            <button
+              type="button"
+              className={styles.collapseButton}
+              onClick={onToggleCollapse}
+              aria-expanded={!collapsed}
+              aria-label={`${collapsed ? "Expand" : "Collapse"} ${title}`}
+              title={`${collapsed ? "Expand" : "Collapse"} ${title}`}
+            >
+              {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+            </button>
+          ) : null}
           {dragLabel ? (
             <span className={styles.dragHandle} title={`Drag to move ${dragLabel}`}>
               <Grip size={14} />
@@ -126,7 +184,7 @@ function Card({
           ) : null}
         </div>
       </div>
-      <div className={`${styles.cardBody} ${bodyClassName || ""}`}>{children}</div>
+      {collapsed ? null : <div className={`${styles.cardBody} ${bodyClassName || ""}`}>{children}</div>}
     </section>
   );
 }
@@ -157,10 +215,12 @@ function formatEventDateTimeRange(event: CalendarEvent): string {
 export function OwnerDashboard() {
   const [manual, setManual] = useState<ManualState>(DEFAULT_MANUAL_STATE);
   const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>([...DEFAULT_WIDGET_ORDER]);
+  const [collapsed, setCollapsed] = useState<CollapsibleId[]>([]);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [calendarFallbackReason, setCalendarFallbackReason] = useState<string | null>(null);
   const [stateError, setStateError] = useState<string | null>(null);
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [loadingCalendar, setLoadingCalendar] = useState(true);
@@ -170,6 +230,12 @@ export function OwnerDashboard() {
   const [calendarExpanded, setCalendarExpanded] = useState(false);
   const [selectedCalendarEvent, setSelectedCalendarEvent] = useState<CalendarEvent | null>(null);
   const [draggingWidget, setDraggingWidget] = useState<WidgetId | null>(null);
+  const currentMinute = useSyncExternalStore(
+    subscribeToMinute,
+    getMinuteSnapshot,
+    getServerMinuteSnapshot
+  );
+  const now = currentMinute === null ? null : currentMinute * MINUTE_MS;
   const hasLoadedStateRef = useRef(false);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -177,12 +243,14 @@ export function OwnerDashboard() {
     setStateError(null);
     try {
       const response = await fetch("/api/state", { cache: "no-store" });
+      if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json?.error || "State fetch failed");
       }
       setManual((json?.manual as ManualState) || DEFAULT_MANUAL_STATE);
       setWidgetOrder(Array.isArray(json?.widgetOrder) ? (json.widgetOrder as WidgetId[]) : [...DEFAULT_WIDGET_ORDER]);
+      setCollapsed(Array.isArray(json?.collapsed) ? json.collapsed.filter(isCollapsibleId) : []);
       hasLoadedStateRef.current = true;
     } catch (error) {
       setStateError(error instanceof Error ? error.message : String(error));
@@ -192,7 +260,11 @@ export function OwnerDashboard() {
     }
   }
 
-  async function saveDashboardState(nextManual: ManualState, nextWidgetOrder: WidgetId[]) {
+  async function saveDashboardState(
+    nextManual: ManualState,
+    nextWidgetOrder: WidgetId[],
+    nextCollapsed: CollapsibleId[]
+  ) {
     try {
       const response = await fetch("/api/state", {
         method: "PUT",
@@ -201,9 +273,11 @@ export function OwnerDashboard() {
         },
         body: JSON.stringify({
           manual: nextManual,
-          widgetOrder: nextWidgetOrder
+          widgetOrder: nextWidgetOrder,
+          collapsed: nextCollapsed
         })
       });
+      if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json?.error || "State save failed");
@@ -218,11 +292,14 @@ export function OwnerDashboard() {
     setDashboardError(null);
     try {
       const response = await fetch("/api/dashboard", { cache: "no-store" });
+      if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json?.error || "Dashboard fetch failed");
       }
-      setDashboardData(json as DashboardData);
+      // Normalize rather than cast: a proxied upstream can return any shape,
+      // and an undefined `hours` used to crash the entire page.
+      setDashboardData(normalizeDashboardData(json));
       setLastRefreshed(Date.now());
     } catch (error) {
       setDashboardError(error instanceof Error ? error.message : String(error));
@@ -235,11 +312,15 @@ export function OwnerDashboard() {
     setCalendarError(null);
     try {
       const response = await fetch("/api/calendar", { cache: "no-store" });
+      if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json?.error || "Calendar fetch failed");
       }
       setCalendarEvents(Array.isArray(json?.upcomingEvents) ? json.upcomingEvents : []);
+      setCalendarFallbackReason(
+        json?.source === "gog" || json?.source === "upstream" ? null : json?.fallbackReason || null
+      );
       setLastRefreshed(Date.now());
     } catch (error) {
       setCalendarError(error instanceof Error ? error.message : String(error));
@@ -255,6 +336,7 @@ export function OwnerDashboard() {
     void run();
   }, []);
 
+
   useEffect(() => {
     if (!hasLoadedStateRef.current) return;
     if (loadingState) return;
@@ -264,7 +346,7 @@ export function OwnerDashboard() {
     }
 
     saveTimeoutRef.current = setTimeout(() => {
-      void saveDashboardState(manual, widgetOrder);
+      void saveDashboardState(manual, widgetOrder, collapsed);
     }, 350);
 
     return () => {
@@ -272,7 +354,21 @@ export function OwnerDashboard() {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [loadingState, manual, widgetOrder]);
+  }, [loadingState, manual, widgetOrder, collapsed]);
+
+  function toggleCollapsed(id: CollapsibleId) {
+    setCollapsed((current) =>
+      current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]
+    );
+  }
+
+  /** Spread onto a Card to make it collapsible and persist the choice. */
+  function collapseProps(id: CollapsibleId) {
+    return {
+      collapsed: collapsed.includes(id),
+      onToggleCollapse: () => toggleCollapsed(id)
+    };
+  }
 
   function refreshAll() {
     setLoadingDashboard(true);
@@ -281,31 +377,93 @@ export function OwnerDashboard() {
     void Promise.all([fetchDashboardState(), fetchDashboardData(), fetchCalendarData()]);
   }
 
+  // Local midnight, so the columns roll over for a dashboard left open
+  // overnight but do not rebuild on every clock tick. Empty before mount
+  // rather than guessing a date the server and client would disagree on.
+  const dayStartMs = now === null ? null : new Date(now).setHours(0, 0, 0, 0);
   const groupedDays = useMemo(
-    () =>
-      Array.from({ length: 3 }, (_, offset) => {
-        const date = new Date();
-        date.setHours(0, 0, 0, 0);
-        date.setDate(date.getDate() + offset);
-        const key = dayKey(date);
-        return {
-          key,
-          label: formatDayLabel(date),
-          events: calendarEvents.filter((event) => dayKey(new Date(event.startMs)) === key)
-        };
-      }),
-    [calendarEvents]
+    () => (dayStartMs === null ? [] : buildDayColumns(calendarEvents, CALENDAR_DAY_COUNT, new Date(dayStartMs))),
+    [calendarEvents, dayStartMs]
   );
 
   const hoursEntries = dashboardData?.hours[hoursWindow] ?? [];
   const maxHours = Math.max(...hoursEntries.map((entry) => entry.hours), 1);
+
+  const isRefreshing = loadingDashboard || loadingCalendar || loadingState;
+
+  // `now` stays null through SSR and the first client render so the clock never
+  // causes a hydration mismatch; the effect above fills it in and ticks it.
+  const dateLabel = now
+    ? new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric" }).format(now)
+    : "Today";
+  const clockLabel = now ? formatClock(now) : "--:--";
+  const refreshLabel = isRefreshing
+    ? "Refreshing…"
+    : lastRefreshed
+      ? `Refreshed ${formatClock(lastRefreshed)}`
+      : "Not refreshed yet";
+
+  const p0Count = dashboardData?.priorities.find((bucket) => bucket.key === "P0")?.projects.length ?? 0;
+  const weekHours = (dashboardData?.hours.week ?? []).reduce((total, entry) => total + entry.hours, 0);
+  const openTasks = dashboardData?.upNext.filter((task) => !task.done).length ?? 0;
+
+  // Gated on `now` for the same hydration reason, and so "next" means next
+  // relative to the ticking clock rather than page load.
+  const nextEvent = useMemo(() => {
+    if (now === null) return null;
+    return (
+      calendarEvents
+        .filter((event) => event.endMs >= now)
+        .sort((a, b) => a.startMs - b.startMs)[0] ?? null
+    );
+  }, [calendarEvents, now]);
+
+  const kpis = [
+    {
+      label: "MRR",
+      value: formatMoney(manual.mrr.current),
+      hint: `${manual.mrr.momDelta}% MoM · proj ${formatMoney(manual.mrr.projected)}`,
+      title: undefined as string | undefined
+    },
+    {
+      label: "P0 critical",
+      value: loadingDashboard ? "—" : String(p0Count),
+      hint: p0Count === 0 ? "nothing critical" : "projects need you",
+      title: undefined
+    },
+    {
+      label: "Open in Up Next",
+      value: loadingDashboard ? "—" : String(openTasks),
+      hint: "tasks queued",
+      title: undefined
+    },
+    {
+      label: "Hours this week",
+      value: loadingDashboard ? "—" : `${Math.round(weekHours * 10) / 10}h`,
+      hint: "tracked in ClickUp",
+      title: undefined
+    },
+    {
+      label: "Next up",
+      value: loadingCalendar || now === null ? "—" : nextEvent ? formatEventTime(nextEvent) : "Clear",
+      hint: nextEvent ? nextEvent.title : "nothing scheduled",
+      title: nextEvent?.title
+    }
+  ];
+
+  // Sample data that looks live is the failure mode worth shouting about, so
+  // collect every route that fell back and say why.
+  const fallbackNotices = [
+    dashboardData?.fallbackReason ? { scope: "ClickUp", reason: dashboardData.fallbackReason } : null,
+    calendarFallbackReason ? { scope: "Calendar", reason: calendarFallbackReason } : null
+  ].filter((notice): notice is { scope: string; reason: string } => notice !== null);
 
   const widgets: Record<WidgetId, React.ReactNode> = {
     projects: (
       <Card
         title="Projects"
         eyebrow="Add / prioritization"
-        dragLabel="Projects"
+        dragLabel="Projects" {...collapseProps("projects")}
         action={<span className={styles.badge}>{dashboardData?.source === "live" ? "Live ClickUp" : "Sample"}</span>}
       >
         {loadingDashboard ? (
@@ -335,7 +493,7 @@ export function OwnerDashboard() {
       </Card>
     ),
     mrr: (
-      <Card title="MRR" eyebrow="Multiply / scoreboard" dragLabel="MRR">
+      <Card title="MRR" eyebrow="Multiply / scoreboard" dragLabel="MRR" {...collapseProps("mrr")}>
         <p className={styles.metric}>{formatMoney(manual.mrr.current)}</p>
         <div className={styles.inputs2}>
           <label className={styles.field}>
@@ -392,7 +550,7 @@ export function OwnerDashboard() {
       <Card
         title="Hours by Project"
         eyebrow="Multiply / where time went"
-        dragLabel="Hours by Project"
+        dragLabel="Hours by Project" {...collapseProps("hours")}
         action={
           <div className={styles.hoursToggle}>
             <button
@@ -442,7 +600,7 @@ export function OwnerDashboard() {
       <Card
         title="Calendar"
         eyebrow={calendarExpanded ? "Divide / expanded schedule view" : "Divide / today + next 2 days"}
-        dragLabel="Calendar"
+        dragLabel="Calendar" {...collapseProps("calendar")}
         className={calendarExpanded ? styles.calendarExpandedCard : undefined}
         bodyClassName={calendarExpanded ? styles.calendarExpandedBody : undefined}
         action={
@@ -503,7 +661,7 @@ export function OwnerDashboard() {
       </Card>
     ),
     goals: (
-      <Card title="Steps to Clear the Bottleneck" eyebrow="Add / execution path" dragLabel="Goals">
+      <Card title="Steps to Clear the Bottleneck" eyebrow="Add / execution path" dragLabel="Goals" {...collapseProps("goals")}>
         <div className={styles.stack}>
           {manual.goals.map((goal, index) => (
             <label key={`goal-${index}`} className={styles.goalRow}>
@@ -528,7 +686,7 @@ export function OwnerDashboard() {
       <Card
         title="Up Next"
         eyebrow="Add / next clearers"
-        dragLabel="Up Next"
+        dragLabel="Up Next" {...collapseProps("upNext")}
         action={<span className={styles.badge}>{dashboardData?.source === "live" ? "Live ClickUp" : "Local only"}</span>}
       >
         {loadingDashboard ? (
@@ -578,7 +736,7 @@ export function OwnerDashboard() {
       </Card>
     ),
     phoneCalls: (
-      <Card title="Phone Calls" eyebrow="Divide / communication block" dragLabel="Phone Calls">
+      <Card title="Phone Calls" eyebrow="Divide / communication block" dragLabel="Phone Calls" {...collapseProps("phoneCalls")}>
         <div className={styles.callsGrid}>
           {(["toMake", "made"] as const).map((column) => (
             <div key={column} className={styles.callColumn}>
@@ -663,7 +821,7 @@ export function OwnerDashboard() {
       </Card>
     ),
     whatsImportant: (
-      <Card title="What's Important" eyebrow="Execution / remove resistance" dragLabel="What's Important">
+      <Card title="What's Important" eyebrow="Execution / remove resistance" dragLabel="What's Important" {...collapseProps("whatsImportant")}>
         <div className={styles.focusPanel}>
           <div className={styles.rowBetween}>
             <strong>Self-talk / focus today</strong>
@@ -683,7 +841,7 @@ export function OwnerDashboard() {
       </Card>
     ),
     openSlot: (
-      <Card title="Daily System Snapshot" eyebrow="4-step summary" dragLabel="Open Slot">
+      <Card title="Daily System Snapshot" eyebrow="4-step summary" dragLabel="Open Slot" {...collapseProps("openSlot")}>
         <div className={styles.stack}>
           <div className={styles.openIdea}>
             <span>Lens: {manual.hyperfocus.lens}</span>
@@ -709,9 +867,12 @@ export function OwnerDashboard() {
         <header className={styles.header}>
           <div>
             <p className={styles.eyebrow}>Marketing Bull / Owner view</p>
-            <h1 className={styles.title}>See the business in 30 seconds.</h1>
-            <p className={styles.subtitle}>
-              Standalone owner dashboard only. Lean shell, live ClickUp/calendar adapters, and a daily `Subtract / Add / Divide / Multiply` operating layer.
+            <h1 className={styles.title}>{dateLabel}</h1>
+            <p className={styles.headerMeta}>
+              <Clock size={14} />
+              <span className={styles.headerClock}>{clockLabel}</span>
+              <span aria-hidden="true">·</span>
+              <span>{refreshLabel}</span>
             </p>
           </div>
           <div className={styles.headerActions}>
@@ -721,52 +882,57 @@ export function OwnerDashboard() {
               onClick={() => {
                 refreshAll();
               }}
-              disabled={loadingDashboard || loadingCalendar || loadingState}
+              disabled={isRefreshing}
             >
-              <RefreshCw
-                size={16}
-                className={loadingDashboard || loadingCalendar || loadingState ? "spin" : undefined}
-              />
+              <RefreshCw size={16} className={isRefreshing ? "spin" : undefined} />
               Refresh
             </button>
-            {lastRefreshed ? (
-              <span className={styles.helpText}>
-                Refreshed{" "}
-                {new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(
-                  lastRefreshed
-                )}
-              </span>
-            ) : null}
+            <a
+              href="http://100.119.59.63:3333/tasks"
+              target="_blank"
+              rel="noreferrer"
+              className={`${styles.button} ${styles.buttonQuiet}`}
+            >
+              <ExternalLink size={14} />
+              Tasks
+            </a>
           </div>
         </header>
 
-        <div className={styles.pills}>
-          <span className={styles.pill}>
-            <Sparkles size={14} />
-            {loadingState ? "Loading SQLite state" : "SQLite-backed shared state"}
-          </span>
-          <span className={styles.pill}>
-            <Grip size={14} />
-            Drag to rearrange widgets
-          </span>
-          <span className={styles.pill}>
-            <Target size={14} />
-            Bottleneck-first workflow
-          </span>
-          <a
-            href="http://100.119.59.63:3333/tasks"
-            target="_blank"
-            rel="noreferrer"
-            className={`${styles.pill} ${styles.pillLink}`}
-          >
-            <ExternalLink size={14} />
-            Tasks
-          </a>
+        <div className={styles.kpiStrip}>
+          {kpis.map((kpi) => (
+            <div key={kpi.label} className={styles.kpi}>
+              <p className={styles.kpiLabel}>{kpi.label}</p>
+              <p className={styles.kpiValue} title={kpi.title}>
+                {kpi.value}
+              </p>
+              <p className={styles.kpiHint}>{kpi.hint}</p>
+            </div>
+          ))}
         </div>
 
         {stateError ? <p className={styles.error}>{stateError}</p> : null}
 
-        <Card title="Daily Hyperfocus System" eyebrow="Apply the 4 steps every day" className={styles.systemCard}>
+        {fallbackNotices.length > 0 ? (
+          <div className={styles.fallbackNotice} role="status">
+            <AlertTriangle size={16} className={styles.fallbackIcon} />
+            <div>
+              <strong>Showing sample data — these numbers are not real.</strong>
+              {fallbackNotices.map((notice) => (
+                <p key={notice.scope} className={styles.fallbackReason}>
+                  {notice.scope}: {notice.reason}
+                </p>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <Card
+          title="Daily Hyperfocus System"
+          eyebrow="Apply the 4 steps every day"
+          className={styles.systemCard}
+          {...collapseProps(HYPERFOCUS_PANEL_ID)}
+        >
           <div className={styles.systemGrid}>
             <div className={styles.systemStep}>
               <div className={styles.systemStepHeader}>

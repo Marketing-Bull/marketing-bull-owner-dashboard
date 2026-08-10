@@ -2,7 +2,9 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
+import { normalizeDashboardData } from "@/lib/dashboard-data";
 import { loadDashboardState } from "@/lib/dashboard-state";
+import { reportFallback } from "@/lib/fallback";
 import { SAMPLE_DASHBOARD_DATA } from "@/lib/sample-data";
 import type { DashboardData, HoursEntry, PriorityBucket, UpNextTask } from "@/lib/types";
 
@@ -264,7 +266,9 @@ export async function GET() {
           { status: response.status }
         );
       }
-      return NextResponse.json(json, {
+      // Normalize the proxied body so a drifting upstream cannot hand the
+      // client a shape the dashboard will crash on.
+      return NextResponse.json(normalizeDashboardData(json), {
         headers: { "Cache-Control": "no-store" }
       });
     } catch (error) {
@@ -331,9 +335,13 @@ export async function GET() {
     return NextResponse.json(liveData, {
       headers: { "Cache-Control": "no-store" }
     });
-  } catch {
-    return NextResponse.json(SAMPLE_DASHBOARD_DATA, {
-      headers: { "Cache-Control": "no-store" }
-    });
+  } catch (error) {
+    // Never fail silently here: without a reason, sample MRR and priorities are
+    // indistinguishable from real ones.
+    const fallbackReason = reportFallback("/api/dashboard", error);
+    return NextResponse.json(
+      { ...SAMPLE_DASHBOARD_DATA, fallbackReason, generatedAt: Date.now() },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   }
 }

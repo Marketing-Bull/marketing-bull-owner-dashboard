@@ -1,0 +1,64 @@
+.shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.card {
+  width: 100%;
+  max-width: 520px;
+  background: var(--panel);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 28px;
+  box-shadow: var(--shadow);
+  padding: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+}
+
+.title {
+  margin: 0 0 10px;
+  font-size: 28px;
+  letter-spacing: -0.03em;
+}
+
+.body {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.detail {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(190, 18, 60, 0.2);
+  background: rgba(255, 228, 230, 0.5);
+  color: var(--danger);
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.button {
+  border: 1px solid transparent;
+  background: var(--text);
+  color: white;
+  border-radius: 999px;
+  padding: 11px 20px;
+  cursor: pointer;
+  font-weight: 600;
+}
