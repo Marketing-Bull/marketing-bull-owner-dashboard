@@ -2,7 +2,12 @@ import { mkdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { cwd } from "node:process";
-import { DEFAULT_WIDGET_ORDER, type WidgetId } from "@/lib/dashboard-layout";
+import {
+  DEFAULT_WIDGET_ORDER,
+  isCollapsibleId,
+  type CollapsibleId,
+  type WidgetId
+} from "@/lib/dashboard-layout";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import type { ManualState, PhoneCallItem } from "@/lib/types";
 
@@ -16,6 +21,7 @@ type DashboardStateRow = {
   whats_important: string;
   hyperfocus_json: string;
   widget_order_json: string;
+  collapsed_json: string;
 };
 
 let database: DatabaseSync | null = null;
@@ -35,6 +41,7 @@ function getDatabase(): DatabaseSync {
       whats_important TEXT NOT NULL,
       hyperfocus_json TEXT NOT NULL,
       widget_order_json TEXT NOT NULL,
+      collapsed_json TEXT NOT NULL DEFAULT '[]',
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -48,7 +55,23 @@ function getDatabase(): DatabaseSync {
     );
   `);
 
+  applyMigrations(database);
+
   return database;
+}
+
+/**
+ * `CREATE TABLE IF NOT EXISTS` is a no-op against a database created by an
+ * earlier version, so new columns have to be added explicitly or every read
+ * fails with "no such column" on an existing install.
+ */
+function applyMigrations(db: DatabaseSync): void {
+  const columns = db.prepare("PRAGMA table_info(dashboard_state)").all() as Array<{ name?: unknown }>;
+  const columnNames = new Set(columns.map((column) => String(column.name)));
+
+  if (!columnNames.has("collapsed_json")) {
+    db.exec("ALTER TABLE dashboard_state ADD COLUMN collapsed_json TEXT NOT NULL DEFAULT '[]'");
+  }
 }
 
 function normalizeGoals(value: unknown): ManualState["goals"] {
@@ -73,6 +96,12 @@ function normalizeWidgetOrder(value: unknown): WidgetId[] {
   const deduped = Array.from(new Set(valid));
   const missing = DEFAULT_WIDGET_ORDER.filter((id) => !deduped.includes(id));
   return [...deduped, ...missing];
+}
+
+/** Keeps only known ids, deduped, so a stale id can never hide a live panel. */
+function normalizeCollapsed(value: unknown): CollapsibleId[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.filter(isCollapsibleId)));
 }
 
 function normalizeHyperfocus(value: unknown): ManualState["hyperfocus"] {
@@ -196,21 +225,32 @@ function ensureSeedState(): void {
 export type DashboardStatePayload = {
   manual: ManualState;
   widgetOrder: WidgetId[];
+  collapsed: CollapsibleId[];
 };
+
+/** A malformed JSON column must not 500 the whole dashboard. */
+function safeParse(json: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+}
 
 export function loadDashboardState(): DashboardStatePayload {
   ensureSeedState();
   const db = getDatabase();
 
   const row = db.prepare(`
-    SELECT goals_json, mrr_current, mrr_projected, mrr_mom_delta, whats_important, hyperfocus_json, widget_order_json
+    SELECT goals_json, mrr_current, mrr_projected, mrr_mom_delta, whats_important, hyperfocus_json, widget_order_json, collapsed_json
     FROM dashboard_state WHERE id = 1
   `).get() as DashboardStateRow | undefined;
 
   if (!row) {
     return {
       manual: DEFAULT_MANUAL_STATE,
-      widgetOrder: [...DEFAULT_WIDGET_ORDER]
+      widgetOrder: [...DEFAULT_WIDGET_ORDER],
+      collapsed: []
     };
   }
 
@@ -227,12 +267,13 @@ export function loadDashboardState(): DashboardStatePayload {
         projected: row.mrr_projected,
         momDelta: row.mrr_mom_delta
       },
-      hyperfocus: normalizeHyperfocus(JSON.parse(row.hyperfocus_json)),
-      goals: normalizeGoals(JSON.parse(row.goals_json)),
+      hyperfocus: normalizeHyperfocus(safeParse(row.hyperfocus_json)),
+      goals: normalizeGoals(safeParse(row.goals_json)),
       phoneCalls: mapPhoneCalls(phoneCallRows),
       whatsImportant: row.whats_important
     },
-    widgetOrder: normalizeWidgetOrder(JSON.parse(row.widget_order_json))
+    widgetOrder: normalizeWidgetOrder(safeParse(row.widget_order_json)),
+    collapsed: normalizeCollapsed(safeParse(row.collapsed_json))
   };
 }
 
@@ -241,23 +282,28 @@ export function saveDashboardState(payload: DashboardStatePayload): DashboardSta
   const db = getDatabase();
   const manual = normalizeManualState(payload.manual);
   const widgetOrder = normalizeWidgetOrder(payload.widgetOrder);
+  const collapsed = normalizeCollapsed(payload.collapsed);
 
-  db.prepare(`
-    UPDATE dashboard_state
-    SET goals_json = ?, mrr_current = ?, mrr_projected = ?, mrr_mom_delta = ?, whats_important = ?, hyperfocus_json = ?, widget_order_json = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = 1
-  `).run(
-    JSON.stringify(manual.goals),
-    manual.mrr.current,
-    manual.mrr.projected,
-    manual.mrr.momDelta,
-    manual.whatsImportant,
-    JSON.stringify(manual.hyperfocus),
-    JSON.stringify(widgetOrder)
-  );
-
+  // One transaction around the whole save. Previously the dashboard_state
+  // UPDATE ran before BEGIN, so a failure while rewriting phone_calls rolled
+  // back only the calls and left the rest of the save applied.
   db.exec("BEGIN");
   try {
+    db.prepare(`
+      UPDATE dashboard_state
+      SET goals_json = ?, mrr_current = ?, mrr_projected = ?, mrr_mom_delta = ?, whats_important = ?, hyperfocus_json = ?, widget_order_json = ?, collapsed_json = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = 1
+    `).run(
+      JSON.stringify(manual.goals),
+      manual.mrr.current,
+      manual.mrr.projected,
+      manual.mrr.momDelta,
+      manual.whatsImportant,
+      JSON.stringify(manual.hyperfocus),
+      JSON.stringify(widgetOrder),
+      JSON.stringify(collapsed)
+    );
+
     db.prepare("DELETE FROM phone_calls").run();
     const insertCall = db.prepare(`
       INSERT INTO phone_calls (id, column_name, sort_order, name, number, checked)
@@ -278,5 +324,5 @@ export function saveDashboardState(payload: DashboardStatePayload): DashboardSta
     throw error;
   }
 
-  return { manual, widgetOrder };
+  return { manual, widgetOrder, collapsed };
 }

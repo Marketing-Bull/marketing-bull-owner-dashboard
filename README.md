@@ -26,10 +26,11 @@ The app has 3 data layers:
   - `Goals`
   - `Phone Calls`
   - `What's Important`
-  - widget layout/order
+  - widget layout/order and which panels are collapsed
 
 3. `UI/runtime layer`
 - Drag-and-drop widget ordering
+- Collapsible panels (including the Daily Hyperfocus System), persisted server-side
 - responsive top-aligned grid
 - event detail modal for calendar items
 - installable PWA shell with manifest, icons, and service worker
@@ -110,7 +111,7 @@ Currently stores:
 - hyperfocus / system fields
 - goals
 - phone calls
-- widget layout/order
+- widget layout/order and collapsed panels
 
 It does **not** store ClickUp tasks or Google Calendar events as source-of-truth data right now.
 
@@ -162,6 +163,7 @@ bugs that actually shipped rather than at coverage for its own sake:
   responses, including the exact body that used to white-screen the dashboard.
 - `auth.test.ts` — the access-control decision matrix, weighted toward the
   fail-open cases where a mistake would leak data.
+- `dashboard-layout.test.ts` — the collapsible-panel id set.
 
 ## Production / Current Live Host
 
@@ -183,7 +185,9 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 - `src/app/error.tsx`
 - `src/proxy.ts`
 - `src/lib/auth.ts`
+- `src/lib/calendar-days.ts`
 - `src/lib/dashboard-data.ts`
+- `src/lib/dashboard-layout.ts`
 - `src/lib/dashboard-state.ts`
 - `src/lib/fallback.ts`
 - `src/lib/sample-data.ts`
@@ -198,6 +202,4 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 - install UX is still basic; no explicit install button yet
 - ClickUp team/assignee IDs and the calendar account are hardcoded as source
   defaults; they should be env-only
-- `saveDashboardState` updates `dashboard_state` outside the transaction that
-  wraps the phone-call rows, so a failure mid-save can leave a partial write
 - tests cover the lib layer only; the React components are untested
