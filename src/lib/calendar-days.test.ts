@@ -131,6 +131,13 @@ describe("buildDayColumns", () => {
     });
   });
 
+  it("follows the provided local day rather than a fixed August window", () => {
+    inZone("America/New_York", () => {
+      const columns = buildDayColumns([], 3, new Date(2026, 10, 3, 9, 0));
+      expect(columns.map((column) => column.key)).toEqual(["2026-11-03", "2026-11-04", "2026-11-05"]);
+    });
+  });
+
   it("drops events outside the window without disturbing the rest", () => {
     inZone("America/New_York", () => {
       const columns = buildDayColumns(

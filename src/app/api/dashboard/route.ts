@@ -50,6 +50,10 @@ type BottleneckContext = {
   target: string;
 };
 
+type ClickUpTasksResponse = {
+  tasks: ClickUpTask[];
+};
+
 function startOfCurrentWeek(): Date {
   const now = new Date();
   const day = now.getDay();
@@ -215,6 +219,16 @@ function buildUpNext(tasks: ClickUpTask[], context?: BottleneckContext): UpNextT
     }));
 }
 
+function buildTaskCollection(tasks: ClickUpTask[], fallbackStatus: string, limit = 6) {
+  return tasks.slice(0, limit).map((task) => ({
+    id: task.id,
+    title: task.name.replace(/^\[(P[0-3])\]\s*/i, ""),
+    subtitle: task.status?.status || task.list?.name || fallbackStatus,
+    status: task.status?.status,
+    href: task.url
+  }));
+}
+
 function buildHours(entries: ClickUpTimeEntry[]): HoursEntry[] {
   const grouped = new Map<string, number>();
   for (const entry of entries) {
@@ -298,8 +312,11 @@ export async function GET() {
     taskParams.append("subtasks", "true");
     taskParams.append("page", "0");
 
-    const [tasksResponse, weekTimeResponse, monthTimeResponse] = await Promise.all([
-      fetchClickUpJson<{ tasks: ClickUpTask[] }>(`/team/${teamId}/task`, taskParams, apiKey),
+    const projectsListId = process.env.OWNER_DASHBOARD_CLICKUP_PROJECTS_LIST_ID?.trim() || "901114301312";
+    const clientsListId = process.env.OWNER_DASHBOARD_CLICKUP_CLIENTS_LIST_ID?.trim() || "901112740853";
+
+    const [tasksResponse, weekTimeResponse, monthTimeResponse, projectsResponse, clientsResponse] = await Promise.all([
+      fetchClickUpJson<ClickUpTasksResponse>(`/team/${teamId}/task`, taskParams, apiKey),
       fetchClickUpJson<{ data: ClickUpTimeEntry[] }>(
         `/team/${teamId}/time_entries`,
         new URLSearchParams({
@@ -317,12 +334,33 @@ export async function GET() {
           assignee: assigneeId
         }),
         apiKey
+      ),
+      fetchClickUpJson<ClickUpTasksResponse>(
+        `/list/${projectsListId}/task`,
+        new URLSearchParams({
+          include_closed: "false",
+          page: "0"
+        }),
+        apiKey
+      ),
+      fetchClickUpJson<ClickUpTasksResponse>(
+        `/list/${clientsListId}/task`,
+        new URLSearchParams({
+          include_closed: "true",
+          page: "0"
+        }),
+        apiKey
       )
     ]);
 
     const tasks = tasksResponse.tasks || [];
+    const clientTasks = (clientsResponse.tasks || []).filter(
+      (task) => task.status?.status?.toLowerCase() === "won"
+    );
     const liveData: DashboardData = {
       priorities: buildPriorityBuckets(tasks),
+      projects: buildTaskCollection(projectsResponse.tasks || [], "Project"),
+      clients: buildTaskCollection(clientTasks, "Won"),
       hours: {
         week: buildHours(weekTimeResponse.data || []),
         month: buildHours(monthTimeResponse.data || [])

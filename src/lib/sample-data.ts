@@ -79,6 +79,14 @@ export const SAMPLE_DASHBOARD_DATA: DashboardData = {
       ]
     }
   ],
+  projects: [
+    { id: "proj-1", title: "RTT Mobile Site", subtitle: "Active" },
+    { id: "proj-2", title: "Expert Witness Lead Campaign", subtitle: "Active" }
+  ],
+  clients: [
+    { id: "client-1", title: "Rock The Treatment", subtitle: "Won" },
+    { id: "client-2", title: "Dr. Sam R. Morhaim | Dentist", subtitle: "Won" }
+  ],
   hours: {
     week: [
       { label: "Owner Dashboard", hours: 6.5 },
@@ -139,6 +147,15 @@ export function buildSampleCalendarEvents(): CalendarEvent[] {
       allDay: false,
       calendarName: "Google Calendar",
       location: "Zoom"
+    },
+    {
+      id: "event-4",
+      title: "Weekly planning",
+      startMs: at(2, 10, 0),
+      endMs: at(2, 11, 0),
+      allDay: false,
+      calendarName: "Google Calendar",
+      location: "HQ"
     }
   ];
 }

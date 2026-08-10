@@ -39,6 +39,8 @@ describe("normalizeDashboardData", () => {
       expect(Array.isArray(result.hours.month)).toBe(true);
       expect(Array.isArray(result.upNext)).toBe(true);
       expect(Array.isArray(result.priorities)).toBe(true);
+      expect(Array.isArray(result.projects)).toBe(true);
+      expect(Array.isArray(result.clients)).toBe(true);
       expect(() => result.priorities.map((bucket) => bucket.projects.length)).not.toThrow();
     });
   }
@@ -51,6 +53,8 @@ describe("normalizeDashboardData", () => {
   it("preserves valid data unchanged", () => {
     const result = normalizeDashboardData({
       priorities: [{ key: "P0", label: "Critical", projects: [{ id: "a", title: "Ship it", href: "https://x" }] }],
+      projects: [{ id: "p1", title: "Project one" }],
+      clients: [{ id: "c1", title: "Client one" }],
       hours: { week: [{ label: "Dashboard", hours: 6.5 }], month: [] },
       upNext: [{ id: "t1", title: "Review", due: "Today 10:30", priority: "P1", done: true }],
       source: "live",
@@ -60,6 +64,8 @@ describe("normalizeDashboardData", () => {
     expect(result.priorities[0].projects).toEqual([
       { id: "a", title: "Ship it", subtitle: undefined, status: undefined, href: "https://x" }
     ]);
+    expect(result.projects).toEqual([{ id: "p1", title: "Project one", subtitle: undefined, status: undefined, href: undefined }]);
+    expect(result.clients).toEqual([{ id: "c1", title: "Client one", subtitle: undefined, status: undefined, href: undefined }]);
     expect(result.hours.week).toEqual([{ label: "Dashboard", hours: 6.5 }]);
     expect(result.upNext[0]).toMatchObject({ id: "t1", priority: "P1", done: true });
     expect(result.source).toBe("live");
