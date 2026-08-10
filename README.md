@@ -8,13 +8,14 @@ Standalone daily owner dashboard for Alex.
 - Built as a standalone replacement for the heavier Mission Control route
 - Designed as a compact daily command center for projects, calendar, priorities, and manual focus state
 - Installable as a PWA
+- Git-derived app version shown in the header
 
 ## How It Works Right Now
 
 The app has 3 data layers:
 
 1. `Live external data`
-- ClickUp powers `Projects`, `Up Next`, and `Hours by Project`
+- ClickUp powers `Eisenhower Matrix`, `Projects`, `Clients`, `Up Next`, and `Hours by Project`
 - Google Calendar powers the `Calendar` widget
 
 2. `Local persistent dashboard state`
@@ -97,6 +98,10 @@ http://localhost:3018/api/state` — 401 means it is on.
 ### `GET /api/dashboard`
 - If `OWNER_DASHBOARD_DATA_URL` is set, proxies that upstream endpoint
 - Otherwise fetches live ClickUp data directly (API key read from `~/.openclaw/secrets.json` → `env.CLICKUP_API_KEY`)
+- The default ClickUp sources are:
+  - `Eisenhower Matrix`: team-wide assigned tasks ranked into P0-P3 buckets
+  - `Projects`: list `901114301312`
+  - `Clients`: list `901112740853`, filtered to `Won`
 - Falls back to sample data only if live fetch fails, and always reports why: the failure is logged server-side and returned as `fallbackReason`, which the UI shows as a "these numbers are not real" banner
 - Proxied and live payloads are both normalized, so a drifting upstream cannot crash the page
 - `Up Next` is currently ranked against the saved `lens`, `target`, and `bottleneck`, with due date and priority still influencing ranking
@@ -125,6 +130,15 @@ Currently stores:
 - widget layout/order and collapsed panels
 
 It does **not** store ClickUp tasks or Google Calendar events as source-of-truth data right now.
+
+## Versioning
+
+- Base release line is currently `v0.1`
+- The header version is derived from git:
+  - current base commit shows `v0.1`
+  - each newer commit becomes `v0.1.<n>+<sha>`
+  - uncommitted local changes append `.dev`
+- This means the visible version changes automatically as soon as a new commit exists in the deployed checkout
 
 ## PWA
 

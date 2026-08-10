@@ -77,6 +77,8 @@ export type UpNextTask = {
 
 export type DashboardData = {
   priorities: PriorityBucket[];
+  projects: ClickUpProject[];
+  clients: ClickUpProject[];
   hours: {
     week: HoursEntry[];
     month: HoursEntry[];

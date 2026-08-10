@@ -213,7 +213,63 @@ function formatEventDateTimeRange(event: CalendarEvent): string {
   return `${day} · ${time.format(start)} - ${time.format(end)}`;
 }
 
-export function OwnerDashboard() {
+function CollectionCard({
+  title,
+  eyebrow,
+  dragLabel,
+  loadingLabel,
+  items,
+  loading,
+  error,
+  source,
+  collapseProps
+}: {
+  title: string;
+  eyebrow: string;
+  dragLabel: string;
+  loadingLabel: string;
+  items: DashboardData["projects"];
+  loading: boolean;
+  error: string | null;
+  source: DashboardData["source"];
+  collapseProps: { collapsed: boolean; onToggleCollapse: () => void };
+}) {
+  return (
+    <Card
+      title={title}
+      eyebrow={eyebrow}
+      dragLabel={dragLabel}
+      {...collapseProps}
+      action={<span className={styles.badge}>{source === "live" ? "Live ClickUp" : "Sample"}</span>}
+    >
+      {loading ? (
+        <div className={styles.loader}><LoaderCircle size={16} /> {loadingLabel}</div>
+      ) : error ? (
+        <div className={styles.error}>{error}</div>
+      ) : items.length === 0 ? (
+        <div className={styles.empty}>Nothing to show yet.</div>
+      ) : (
+        <div className={styles.stack}>
+          {items.map((item) => (
+            <div key={item.id} className={styles.chip}>
+              <div className={styles.rowBetween}>
+                <div className={styles.chipTitle}>{item.title}</div>
+                {item.href ? (
+                  <a href={item.href} target="_blank" rel="noreferrer" className={styles.inlineLinkText}>
+                    Open
+                  </a>
+                ) : null}
+              </div>
+              {item.subtitle ? <div className={styles.chipMeta}>{item.subtitle}</div> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function OwnerDashboard({ version }: { version: string }) {
   const [manual, setManual] = useState<ManualState>(DEFAULT_MANUAL_STATE);
   const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>([...DEFAULT_WIDGET_ORDER]);
   const [collapsed, setCollapsed] = useState<CollapsibleId[]>([]);
@@ -466,13 +522,13 @@ export function OwnerDashboard() {
   const widgets: Record<WidgetId, React.ReactNode> = {
     projects: (
       <Card
-        title="Projects"
+        title="Eisenhower Matrix"
         eyebrow="Add / prioritization"
-        dragLabel="Projects" {...collapseProps("projects")}
+        dragLabel="Eisenhower Matrix" {...collapseProps("projects")}
         action={<span className={styles.badge}>{dashboardData?.source === "live" ? "Live ClickUp" : "Sample"}</span>}
       >
         {loadingDashboard ? (
-          <div className={styles.loader}><LoaderCircle size={16} /> Loading projects</div>
+          <div className={styles.loader}><LoaderCircle size={16} /> Loading matrix</div>
         ) : dashboardError ? (
           <div className={styles.error}>{dashboardError}</div>
         ) : (
@@ -496,6 +552,32 @@ export function OwnerDashboard() {
           </div>
         )}
       </Card>
+    ),
+    activeProjects: (
+      <CollectionCard
+        title="Projects"
+        eyebrow="Execute / active work"
+        dragLabel="Projects"
+        loadingLabel="Loading projects"
+        items={dashboardData?.projects ?? []}
+        loading={loadingDashboard}
+        error={dashboardError}
+        source={dashboardData?.source}
+        collapseProps={collapseProps("activeProjects")}
+      />
+    ),
+    clients: (
+      <CollectionCard
+        title="Clients"
+        eyebrow="Pipeline / won"
+        dragLabel="Clients"
+        loadingLabel="Loading clients"
+        items={dashboardData?.clients ?? []}
+        loading={loadingDashboard}
+        error={dashboardError}
+        source={dashboardData?.source}
+        collapseProps={collapseProps("clients")}
+      />
     ),
     mrr: (
       <Card title="MRR" eyebrow="Multiply / scoreboard" dragLabel="MRR" {...collapseProps("mrr")}>
@@ -887,6 +969,8 @@ export function OwnerDashboard() {
                   Unprotected
                 </span>
               )}
+              <span aria-hidden="true">·</span>
+              <span>{version}</span>
             </p>
           </div>
           <div className={styles.headerActions}>

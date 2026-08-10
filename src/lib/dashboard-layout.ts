@@ -1,5 +1,7 @@
 export const DEFAULT_WIDGET_ORDER = [
   "projects",
+  "activeProjects",
+  "clients",
   "mrr",
   "hours",
   "calendar",
