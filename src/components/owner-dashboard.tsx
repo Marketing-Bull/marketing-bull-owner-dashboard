@@ -18,8 +18,9 @@ import {
   TrendingUp
 } from "lucide-react";
 import styles from "./owner-dashboard.module.css";
-import { buildDayColumns } from "@/lib/calendar-days";
+import { buildDayColumns, dayKey } from "@/lib/calendar-days";
 import { normalizeDashboardData } from "@/lib/dashboard-data";
+import { computeStreak, withTodaySnapshot } from "@/lib/history";
 import {
   hasUnsavedChanges,
   serializeState,
@@ -36,6 +37,7 @@ import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import type {
   CalendarEvent,
   DashboardData,
+  HistoryEntry,
   ManualState,
   PhoneCallItem,
   UpNextTask
@@ -279,6 +281,7 @@ export function OwnerDashboard({ version }: { version: string }) {
   const [manual, setManual] = useState<ManualState>(DEFAULT_MANUAL_STATE);
   const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>([...DEFAULT_WIDGET_ORDER]);
   const [collapsed, setCollapsed] = useState<CollapsibleId[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   // Assume protected until the server says otherwise, so a failed state fetch
   // never produces a false "unprotected" claim.
   const [authConfigured, setAuthConfigured] = useState(true);
@@ -333,6 +336,7 @@ export function OwnerDashboard({ version }: { version: string }) {
       setManual(loadedManual);
       setWidgetOrder(loadedOrder);
       setCollapsed(loadedCollapsed);
+      setHistory(Array.isArray(json?.history) ? (json.history as HistoryEntry[]) : []);
       setAuthConfigured(json?.authConfigured !== false);
       savedSnapshotRef.current = serializeState({
         manual: loadedManual,
@@ -602,6 +606,22 @@ export function OwnerDashboard({ version }: { version: string }) {
         .sort((a, b) => a.startMs - b.startMs)[0] ?? null
     );
   }, [calendarEvents, now]);
+
+  /**
+   * Consecutive days with a daily win recorded, measured from saved history.
+   *
+   * Null until the clock hydrates, for the same reason as `nextEvent`: the
+   * server has no local day, so computing one during SSR would mismatch.
+   */
+  const streak = useMemo(() => {
+    if (now === null) return null;
+    const today = dayKey(new Date(now));
+    // Overlay what is on screen, so a win typed a moment ago counts straight
+    // away instead of waiting out the save debounce.
+    return computeStreak(withTodaySnapshot(history, manual, today), today);
+  }, [history, manual, now]);
+
+  const streakLabel = streak === null ? "—" : `${streak} ${streak === 1 ? "day" : "days"}`;
 
   const kpis = [
     {
@@ -1054,7 +1074,7 @@ export function OwnerDashboard({ version }: { version: string }) {
             <ArrowUpRight size={15} />
           </div>
           <div className={styles.openIdea}>
-            <span>Streak: {manual.hyperfocus.multiply.streakDays} days</span>
+            <span>Streak: {streakLabel}</span>
             <ArrowUpRight size={15} />
           </div>
           <p className={styles.helpText}>{manual.hyperfocus.multiply.dailyWin}</p>
@@ -1302,25 +1322,19 @@ export function OwnerDashboard({ version }: { version: string }) {
                 </div>
               </div>
               <div className={styles.stack}>
-                <label className={styles.fieldCompact}>
-                  <span className={styles.fieldLabel}>Streak days</span>
-                  <input
-                    className={styles.input}
-                    value={manual.hyperfocus.multiply.streakDays}
-                    onChange={(event) =>
-                      setManual((current) => ({
-                        ...current,
-                        hyperfocus: {
-                          ...current.hyperfocus,
-                          multiply: {
-                            ...current.hyperfocus.multiply,
-                            streakDays: event.target.value
-                          }
-                        }
-                      }))
-                    }
-                  />
-                </label>
+                {/*
+                  Read-only on purpose. This used to be a text input, which made
+                  the streak a number you told yourself rather than one you
+                  earned. It is now counted from the saved daily history.
+                */}
+                <div className={styles.loopNote}>
+                  <span className={styles.fieldLabel}>Streak</span>
+                  <p className={styles.highlightMetric}>{streakLabel}</p>
+                  <p className={styles.helpText}>
+                    Consecutive days with a daily win recorded. Counted from saved history — today
+                    still counts once you fill the win in below.
+                  </p>
+                </div>
                 <label className={styles.fieldCompact}>
                   <span className={styles.fieldLabel}>Daily win to repeat</span>
                   <input
