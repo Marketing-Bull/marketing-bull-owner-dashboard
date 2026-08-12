@@ -22,7 +22,6 @@ export const DEFAULT_MANUAL_STATE: ManualState = {
       afternoon: "Execution blocks and cleanup"
     },
     multiply: {
-      streakDays: "5",
       dailyWin: "Start with the bottleneck before checking everything else."
     }
   },

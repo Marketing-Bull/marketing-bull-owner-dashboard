@@ -23,7 +23,6 @@ export type ManualState = {
       afternoon: string;
     };
     multiply: {
-      streakDays: string;
       dailyWin: string;
     };
   };
@@ -33,6 +32,28 @@ export type ManualState = {
     made: PhoneCallItem[];
   };
   whatsImportant: string;
+};
+
+/**
+ * One day's frozen copy of the manual state.
+ *
+ * Written once per day and rewritten by later saves on the same day, so the row
+ * settles on where the day ended up. Yesterday's row is never touched again.
+ */
+export type HistoryEntry = {
+  /** Local calendar day, `YYYY-MM-DD`. */
+  day: string;
+  dailyWin: string;
+  lens: string;
+  target: string;
+  bottleneck: string;
+  mrrCurrent: string;
+  mrrProjected: string;
+  mrrMomDelta: string;
+  goals: [string, string, string];
+  whatsImportant: string;
+  callsMade: number;
+  callsPlanned: number;
 };
 
 export type CalendarEvent = {

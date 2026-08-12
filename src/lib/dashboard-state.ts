@@ -8,8 +8,14 @@ import {
   type CollapsibleId,
   type WidgetId
 } from "@/lib/dashboard-layout";
+import {
+  buildHistorySnapshot,
+  HISTORY_LOOKBACK_DAYS,
+  shiftDayKey,
+  todayKey
+} from "@/lib/history";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
-import type { ManualState, PhoneCallItem } from "@/lib/types";
+import type { HistoryEntry, ManualState, PhoneCallItem } from "@/lib/types";
 
 const DATABASE_PATH = join(cwd(), "data", "dashboard.sqlite");
 
@@ -52,6 +58,25 @@ function getDatabase(): DatabaseSync {
       name TEXT NOT NULL,
       number TEXT NOT NULL,
       checked INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- One row per local calendar day. dashboard_state holds only the current
+    -- values (id = 1), so before this table every save erased the day before it
+    -- and nothing could be counted, trended, or looked back at.
+    CREATE TABLE IF NOT EXISTS daily_history (
+      day TEXT PRIMARY KEY,
+      daily_win TEXT NOT NULL,
+      lens TEXT NOT NULL,
+      target TEXT NOT NULL,
+      bottleneck TEXT NOT NULL,
+      mrr_current TEXT NOT NULL,
+      mrr_projected TEXT NOT NULL,
+      mrr_mom_delta TEXT NOT NULL,
+      goals_json TEXT NOT NULL,
+      whats_important TEXT NOT NULL,
+      calls_made INTEGER NOT NULL,
+      calls_planned INTEGER NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
@@ -124,7 +149,6 @@ function normalizeHyperfocus(value: unknown): ManualState["hyperfocus"] {
       afternoon: typeof divide.afternoon === "string" ? divide.afternoon : fallback.divide.afternoon
     },
     multiply: {
-      streakDays: typeof multiply.streakDays === "string" ? multiply.streakDays : fallback.multiply.streakDays,
       dailyWin: typeof multiply.dailyWin === "string" ? multiply.dailyWin : fallback.multiply.dailyWin
     }
   };
@@ -277,7 +301,87 @@ export function loadDashboardState(): DashboardStatePayload {
   };
 }
 
-export function saveDashboardState(payload: DashboardStatePayload): DashboardStatePayload {
+/**
+ * Reads back the last `HISTORY_LOOKBACK_DAYS` of daily rows, oldest first.
+ *
+ * Day keys are `YYYY-MM-DD`, so a string comparison is already chronological
+ * and the window can be applied in SQL rather than after loading everything.
+ */
+export function loadHistory(today: string = todayKey()): HistoryEntry[] {
+  const db = getDatabase();
+  const cutoff = shiftDayKey(today, -HISTORY_LOOKBACK_DAYS);
+
+  const rows = db.prepare(`
+    SELECT day, daily_win, lens, target, bottleneck, mrr_current, mrr_projected, mrr_mom_delta,
+           goals_json, whats_important, calls_made, calls_planned
+    FROM daily_history
+    WHERE day >= ?
+    ORDER BY day ASC
+  `).all(cutoff) as Array<Record<string, unknown>>;
+
+  return rows.map((row) => ({
+    day: String(row.day),
+    dailyWin: typeof row.daily_win === "string" ? row.daily_win : "",
+    lens: typeof row.lens === "string" ? row.lens : "",
+    target: typeof row.target === "string" ? row.target : "",
+    bottleneck: typeof row.bottleneck === "string" ? row.bottleneck : "",
+    mrrCurrent: typeof row.mrr_current === "string" ? row.mrr_current : "",
+    mrrProjected: typeof row.mrr_projected === "string" ? row.mrr_projected : "",
+    mrrMomDelta: typeof row.mrr_mom_delta === "string" ? row.mrr_mom_delta : "",
+    goals: normalizeGoals(safeParse(String(row.goals_json))),
+    whatsImportant: typeof row.whats_important === "string" ? row.whats_important : "",
+    callsMade: Number(row.calls_made) || 0,
+    callsPlanned: Number(row.calls_planned) || 0
+  }));
+}
+
+/**
+ * Writes today's row, overwriting any earlier write from the same day.
+ *
+ * Every save rewrites today, so the row settles on wherever the day ended up.
+ * Yesterday's row is never touched again -- that is the whole point of it.
+ */
+function recordDailySnapshot(db: DatabaseSync, manual: ManualState, day: string): void {
+  const snapshot = buildHistorySnapshot(manual, day);
+
+  db.prepare(`
+    INSERT INTO daily_history (
+      day, daily_win, lens, target, bottleneck, mrr_current, mrr_projected, mrr_mom_delta,
+      goals_json, whats_important, calls_made, calls_planned, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(day) DO UPDATE SET
+      daily_win = excluded.daily_win,
+      lens = excluded.lens,
+      target = excluded.target,
+      bottleneck = excluded.bottleneck,
+      mrr_current = excluded.mrr_current,
+      mrr_projected = excluded.mrr_projected,
+      mrr_mom_delta = excluded.mrr_mom_delta,
+      goals_json = excluded.goals_json,
+      whats_important = excluded.whats_important,
+      calls_made = excluded.calls_made,
+      calls_planned = excluded.calls_planned,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    snapshot.day,
+    snapshot.dailyWin,
+    snapshot.lens,
+    snapshot.target,
+    snapshot.bottleneck,
+    snapshot.mrrCurrent,
+    snapshot.mrrProjected,
+    snapshot.mrrMomDelta,
+    JSON.stringify(snapshot.goals),
+    snapshot.whatsImportant,
+    snapshot.callsMade,
+    snapshot.callsPlanned
+  );
+}
+
+export function saveDashboardState(
+  payload: DashboardStatePayload,
+  day: string = todayKey()
+): DashboardStatePayload {
   ensureSeedState();
   const db = getDatabase();
   const manual = normalizeManualState(payload.manual);
@@ -317,6 +421,11 @@ export function saveDashboardState(payload: DashboardStatePayload): DashboardSta
         });
       }
     );
+
+    // Inside the same transaction as the rest of the save: a history row that
+    // disagrees with the state it was taken from is worse than no row, because
+    // the streak counted off it would be quietly wrong.
+    recordDailySnapshot(db, manual, day);
 
     db.exec("COMMIT");
   } catch (error) {

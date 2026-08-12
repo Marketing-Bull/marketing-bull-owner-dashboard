@@ -1,15 +1,28 @@
 import { NextResponse } from "next/server";
 import { isAuthConfigured } from "@/lib/auth";
-import { saveDashboardState, loadDashboardState } from "@/lib/dashboard-state";
+import { saveDashboardState, loadDashboardState, loadHistory } from "@/lib/dashboard-state";
+import { computeStreak, todayKey } from "@/lib/history";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
+    const today = todayKey();
+    const history = loadHistory(today);
+
     // `authConfigured` lets the UI show that the dashboard is currently open,
     // so an unprotected deployment is visible rather than silent.
+    //
+    // `streak` is sent alongside the raw history rather than instead of them:
+    // the client recomputes it against unsaved edits, and shipping both keeps
+    // the server's own answer available to anything scripting against the API.
     return NextResponse.json(
-      { ...loadDashboardState(), authConfigured: isAuthConfigured() },
+      {
+        ...loadDashboardState(),
+        history,
+        streak: computeStreak(history, today),
+        authConfigured: isAuthConfigured()
+      },
       {
         headers: { "Cache-Control": "no-store" }
       }

@@ -28,6 +28,8 @@ The app has 3 data layers:
   - `Phone Calls`
   - `What's Important`
   - widget layout/order and which panels are collapsed
+- Every save also writes a dated row to `daily_history`, which is what the
+  `Streak` is counted from
 
 Ticking an `Up Next` checkbox writes the task's status back to ClickUp, so the
 change lives in ClickUp rather than in the page.
@@ -46,7 +48,7 @@ The page is structured around the 4-step daily operating system:
 - `Subtract`: remove distractions and friction
 - `Add`: set lens, target, why, and bottleneck
 - `Divide`: split work into morning / midday / afternoon lanes
-- `Multiply`: repeat the daily win and track consistency
+- `Multiply`: repeat the daily win, with the streak counted from saved history
 
 This sits above the operational widgets so the dashboard is not just a reporting screen; it is meant to drive the day.
 
@@ -91,11 +93,14 @@ http://localhost:3018/api/state` — 401 means it is on.
 
 ### `GET /api/state`
 - Reads saved dashboard state from SQLite
+- Returns `history`: the last 365 days of daily rows, oldest first
+- Returns `streak`: consecutive days ending today with a daily win recorded
 - Also returns `authConfigured`, which drives the header's "Unprotected" chip
 - Requires auth only when a token is configured (see Access Control)
 
 ### `PUT /api/state`
 - Saves dashboard state back to SQLite
+- Also writes (or rewrites) today's `daily_history` row, in the same transaction
 - Requires auth only when a token is configured (see Access Control)
 
 ### `GET /api/dashboard`
@@ -141,8 +146,32 @@ Currently stores:
 - goals
 - phone calls
 - widget layout/order and collapsed panels
+- one dated snapshot per day, in `daily_history`
 
 It does **not** store ClickUp tasks or Google Calendar events as source-of-truth data right now.
+
+### Daily history
+
+`dashboard_state` is a single row (`id = 1`), so before `daily_history` existed
+every save overwrote the day before it and nothing about yesterday survived.
+That is why the streak used to be a number typed in by hand — there was no
+record to count.
+
+Each save upserts today's row, so the row settles on wherever the day ended up
+and earlier days are never touched again. A row keeps the daily win, lens,
+target, bottleneck, MRR figures, goals, what's important, and the phone-call
+counts.
+
+The `Streak` on the Multiply step is derived from those rows: consecutive days
+with a **non-empty daily win**, counting back from today. A blank day breaks it.
+Today being blank does not — counting starts at yesterday in that case, so the
+streak does not read as broken every morning before the win is filled in. Typing
+a win updates the number immediately rather than waiting out the save debounce.
+
+Upgrading an existing database needs no manual step: `CREATE TABLE IF NOT
+EXISTS` covers a new table (unlike a new *column*, which is what
+`applyMigrations()` is for), and history simply starts from the first save after
+the upgrade.
 
 ## Versioning
 
@@ -206,6 +235,23 @@ bugs that actually shipped rather than at coverage for its own sake:
 - `dashboard-save.test.ts` — the autosave decision, in both directions.
 - `clickup.test.ts` — status selection for the write-back, weighted toward the
   refusal cases, since guessing a status would move a real task.
+- `history.test.ts` — streak counting and day-key arithmetic, again across
+  several timezones. Includes the DST transitions where midnight does not exist
+  (`America/Santiago`, `Asia/Beirut`), because a day-shift anchored at midnight
+  silently lands on the wrong day there.
+- `dashboard-history.test.ts` — the `daily_history` table against real SQLite:
+  the upsert, the JSON and integer columns, the lookback window. A streak
+  counted off rows that did not round-trip is wrong in a way that testing the
+  pure counting rules cannot catch.
+- `dashboard-history-upgrade.test.ts` — reading and saving against a database
+  written by the pre-history schema. The live dashboard's SQLite file predates
+  all of this, so "works on a fresh database" proves nothing about the only
+  database that matters.
+
+The two database suites `chdir` into a temp directory before importing
+`dashboard-state.ts`, since it resolves its path from cwd at module load. Vitest
+forks each test file into its own process, so that cannot reach another suite —
+and it means `npm test` never touches the real `data/dashboard.sqlite`.
 
 ## Production / Current Live Host
 
@@ -234,17 +280,42 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 - `src/lib/dashboard-layout.ts`
 - `src/lib/dashboard-state.ts`
 - `src/lib/fallback.ts`
+- `src/lib/history.ts`
 - `src/lib/sample-data.ts`
 - `src/lib/types.ts`
 
 ## What Still Needs Improvement
 
-- `Up Next` ranking is better, but still heuristic-driven
-- no deeper history/streak reporting yet
-- service worker caching is intentionally light
-- install UX is still basic; no explicit install button yet
-- ClickUp team/assignee IDs and the calendar account are hardcoded as source
-  defaults; they should be env-only
-- tests cover the lib layer only; the React components are untested
-- the dashboard ships unprotected by default; `OWNER_DASHBOARD_AUTH_TOKEN` has
-  to be set deliberately before exposing it beyond localhost
+Known and deliberate, roughly in the order they are worth fixing:
+
+- **The app only runs on one machine.** The ClickUp key is read from
+  `~/.openclaw/secrets.json`, the calendar shells out to `~/.local/bin/gog`, and
+  SQLite lives at `cwd()/data` with no backup. Reading `CLICKUP_API_KEY` from
+  env (falling back to the secrets file) and making the database path
+  configurable is the smallest change that unblocks running this anywhere else —
+  and would let the database tests drop their `chdir`.
+- **`Up Next` ranking is heuristic, and its lens weighting does not work.** In
+  `scoreTaskAgainstBottleneck`, lens matches are meant to score 2 against 4 for
+  everything else, but a single token is compared against the whole `lens`
+  field, so any multi-word lens never matches and every hit scores 4. Left
+  alone on purpose: worth one considered pass over the whole ranking rather than
+  a drive-by fix. Marked `FIXME` in `src/app/api/dashboard/route.ts`.
+- **ClickUp source IDs are hardcoded.** The projects and clients list IDs are
+  now named outright in `src/app/api/dashboard/route.ts` rather than read from
+  undocumented env vars; the team and assignee IDs still read env with hardcoded
+  fallbacks. All four should be env-only, and in `.env.example`, when this stops
+  being single-tenant. Marked `FIXME`.
+- The header's "Tasks" button links to a hardcoded Tailscale address
+  (`http://100.119.59.63:3333/tasks`), which is a dead link from anywhere else.
+- History is recorded but barely used — only the streak reads it. The rows carry
+  MRR, goals, and call counts, so trend and look-back reporting is now possible
+  without further schema work.
+- Service worker caching is intentionally light.
+- Install UX is still basic; no explicit install button yet.
+- Tests cover the lib and database layers; the React components are untested.
+  `owner-dashboard.tsx` is ~1,400 lines and holds the save orchestration,
+  drag-and-drop, and the ClickUp write-back — which is where the shipped bugs
+  were. Extracting the fetch/save orchestration into a hook would make it
+  testable and shrink the file at the same time.
+- The dashboard ships unprotected by default; `OWNER_DASHBOARD_AUTH_TOKEN` has
+  to be set deliberately before exposing it beyond localhost.

@@ -138,6 +138,17 @@ function scoreTaskAgainstBottleneck(task: ClickUpTask, context: BottleneckContex
 
   for (const keyword of keywords) {
     if (haystack.includes(keyword)) {
+      // FIXME: this weighting does not do what it looks like it does.
+      //
+      // Lens matches are meant to score 2 and everything else 4, but `keyword`
+      // is a single token out of tokenizeContext while `context.lens` is the
+      // whole field. Any multi-word lens ("client acquisition") can never equal
+      // one token, so the branch never fires and every match scores 4 --
+      // the lens is effectively not weighted at all.
+      //
+      // Deliberately left alone for now: Up Next ranking is heuristic
+      // throughout, and changing the weights is worth doing as one considered
+      // pass over the whole ranking rather than as a drive-by fix here.
       score += keyword === context.lens.toLowerCase() ? 2 : 4;
     }
   }
@@ -285,8 +296,18 @@ export async function GET() {
     taskParams.append("subtasks", "true");
     taskParams.append("page", "0");
 
-    const projectsListId = process.env.OWNER_DASHBOARD_CLICKUP_PROJECTS_LIST_ID?.trim() || "901114301312";
-    const clientsListId = process.env.OWNER_DASHBOARD_CLICKUP_CLIENTS_LIST_ID?.trim() || "901112740853";
+    // FIXME: hardcoded on purpose, for now.
+    //
+    // These were read from OWNER_DASHBOARD_CLICKUP_PROJECTS_LIST_ID and
+    // OWNER_DASHBOARD_CLICKUP_CLIENTS_LIST_ID, but neither was ever documented
+    // in .env.example, so the env path was configuration nobody could discover
+    // and everybody got the fallback anyway. Naming the values outright is at
+    // least honest about where the data comes from.
+    //
+    // Move these back to env alongside the team/assignee ids -- and into
+    // .env.example this time -- when the app stops being single-tenant.
+    const projectsListId = "901114301312";
+    const clientsListId = "901112740853";
 
     const [tasksResponse, weekTimeResponse, monthTimeResponse, projectsResponse, clientsResponse] = await Promise.all([
       fetchClickUpJson<ClickUpTasksResponse>(`/team/${teamId}/task`, taskParams, apiKey),
