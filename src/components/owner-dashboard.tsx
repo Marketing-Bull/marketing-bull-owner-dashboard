@@ -1134,6 +1134,13 @@ export function OwnerDashboard({ version }: { version: string }) {
               <RefreshCw size={16} className={isRefreshing ? "spin" : undefined} />
               Refresh
             </button>
+            {/*
+              FIXME: both of these are hardcoded Tailscale addresses, so they
+              are dead links from anywhere off the tailnet. Same class of
+              problem as the ClickUp source ids -- fine while this is a
+              single-owner dashboard on one machine, worth moving to env when
+              it stops being one.
+            */}
             <a
               href="http://100.119.59.63:3333/tasks"
               target="_blank"
@@ -1142,6 +1149,16 @@ export function OwnerDashboard({ version }: { version: string }) {
             >
               <ExternalLink size={14} />
               Tasks
+            </a>
+            <a
+              href="http://100.82.222.18:9119/chat"
+              target="_blank"
+              rel="noreferrer"
+              className={`${styles.button} ${styles.buttonQuiet}`}
+              title="Hermes Dashboard"
+            >
+              <ExternalLink size={14} />
+              Hermes
             </a>
           </div>
         </header>

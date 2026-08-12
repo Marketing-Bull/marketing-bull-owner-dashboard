@@ -262,6 +262,20 @@ http://100.119.59.63:3018
 http://amb-ubuntu-01.tail7a2140.ts.net:3018
 ```
 
+### Outbound links in the header
+
+The header links out to two other tools on the same tailnet:
+
+| Button | Target |
+| --- | --- |
+| `Tasks` | `http://100.119.59.63:3333/tasks` |
+| `Hermes` | `http://100.82.222.18:9119/chat` (Hermes Dashboard) |
+
+Both addresses are hardcoded, so both are dead links from anywhere off the
+tailnet. That is fine while this is a single-owner dashboard on one machine and
+is marked `FIXME` in the component; they should move to env alongside the
+ClickUp source ids when it stops being one.
+
 ## Key Files
 
 - `src/components/owner-dashboard.tsx`
@@ -305,8 +319,10 @@ Known and deliberate, roughly in the order they are worth fixing:
   undocumented env vars; the team and assignee IDs still read env with hardcoded
   fallbacks. All four should be env-only, and in `.env.example`, when this stops
   being single-tenant. Marked `FIXME`.
-- The header's "Tasks" button links to a hardcoded Tailscale address
-  (`http://100.119.59.63:3333/tasks`), which is a dead link from anywhere else.
+- The header's "Tasks" and "Hermes" buttons link to hardcoded Tailscale
+  addresses (`http://100.119.59.63:3333/tasks` and
+  `http://100.82.222.18:9119/chat`), which are dead links from anywhere off the
+  tailnet. Marked `FIXME`; see [Outbound links in the header](#outbound-links-in-the-header).
 - History is recorded but barely used — only the streak reads it. The rows carry
   MRR, goals, and call counts, so trend and look-back reporting is now possible
   without further schema work.
