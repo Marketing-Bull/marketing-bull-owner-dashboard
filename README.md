@@ -216,6 +216,20 @@ http://100.119.59.63:3018
 http://amb-ubuntu-01.tail7a2140.ts.net:3018
 ```
 
+### Outbound links in the header
+
+The header links out to two other tools on the same tailnet:
+
+| Button | Target |
+| --- | --- |
+| `Tasks` | `http://100.119.59.63:3333/tasks` |
+| `Hermes` | `http://100.82.222.18:9119/chat` (Hermes Dashboard) |
+
+Both addresses are hardcoded, so both are dead links from anywhere off the
+tailnet. That is fine while this is a single-owner dashboard on one machine and
+is marked `FIXME` in the component; they should move to env alongside the
+ClickUp source ids when it stops being one.
+
 ## Key Files
 
 - `src/components/owner-dashboard.tsx`
@@ -245,6 +259,8 @@ http://amb-ubuntu-01.tail7a2140.ts.net:3018
 - install UX is still basic; no explicit install button yet
 - ClickUp team/assignee IDs and the calendar account are hardcoded as source
   defaults; they should be env-only
+- the header's `Tasks` and `Hermes` links are hardcoded Tailscale addresses, so
+  they are dead links from anywhere off the tailnet
 - tests cover the lib layer only; the React components are untested
 - the dashboard ships unprotected by default; `OWNER_DASHBOARD_AUTH_TOKEN` has
   to be set deliberately before exposing it beyond localhost
