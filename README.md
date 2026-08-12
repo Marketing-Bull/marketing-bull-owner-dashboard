@@ -208,6 +208,18 @@ machine.
 
 Node >= 22.5 is required — `src/lib/dashboard-state.ts` uses `node:sqlite`.
 
+### Keeping Next patched
+
+`next` is pinned exactly rather than floated on a range, so security releases do
+not arrive on their own. That matters more here than in most apps: `src/proxy.ts`
+is the whole access-control story, and several Next advisories have been
+proxy/middleware bypasses. Check `npm audit` periodically and treat a
+proxy-bypass advisory as worth acting on immediately, even on a tailnet.
+
+After any Next upgrade, re-check the gate rather than assuming it survived —
+with a token set, every `/api/*` route must answer 401 without credentials, and
+page requests must land on `/login`.
+
 ## Checks
 
 ```bash

@@ -108,6 +108,12 @@ const CALENDAR_DAY_COUNT = 3;
  */
 function redirectedToLogin(response: Response): boolean {
   if (response.status !== 401) return false;
+  // A hard navigation, not router.push(), and not only because this sits at
+  // module scope where the router hook cannot reach. Losing the session should
+  // tear down the React tree: a soft navigation keeps the dashboard mounted
+  // behind the login page, still holding the MRR figures and phone numbers the
+  // 401 just said this client is not entitled to.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
   window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
   return true;
 }
