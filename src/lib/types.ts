@@ -240,6 +240,13 @@ export type MileageEntry = {
   totalMiles: number;
   billable: boolean;
   notes: string;
+  calculationSource: "manual" | "provider";
+  calculationProvider: string | null;
+  calculatedMiles: number | null;
+  routeMetadataJson: string | null;
+  calculatedAt: string | null;
+  startPlaceId: string | null;
+  endPlaceId: string | null;
   createdAt: string;
   updatedAt: string;
 };

@@ -9,6 +9,7 @@ import {
   queryMileageEntries
 } from "@/lib/mileage";
 import { TransactionQueryValidationError } from "@/lib/transaction-query";
+import { getMapsStatus } from "@/lib/maps";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,8 @@ export async function GET(request: Request) {
       mileageEntries: result.items,
       recentTrips: listRecentTrips(db),
       mileageRate: getMileageRate(db),
-      summary: result.filteredTotals
+      summary: result.filteredTotals,
+      maps: getMapsStatus(db)
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const status = error instanceof MileageValidationError || error instanceof TransactionQueryValidationError ? 400 : 500;

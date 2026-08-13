@@ -719,6 +719,67 @@
   max-width: 260px;
 }
 
+.addressField {
+  position: relative;
+}
+
+.addressField label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.addressHint,
+.routeControls span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.addressSuggestions {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgba(17, 24, 39, 0.12);
+}
+
+.addressSuggestions button {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  padding: 10px 12px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.addressSuggestions button:last-child {
+  border-bottom: 0;
+}
+
+.addressSuggestions button:hover,
+.addressSuggestions button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+
+.routeControls {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.routeError {
+  color: var(--danger) !important;
+}
+
 .detailsDisclosure summary {
   cursor: pointer;
   padding: 13px 14px;
