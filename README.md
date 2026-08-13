@@ -397,6 +397,72 @@ three earlier schema generations. It is the only migration allowed that shape �
 everything after it runs against a known state and must be a plain, run-once
 migration.
 
+### Off-site mirror (Supabase)
+
+The daily snapshots below are real backups of a real database that sit on the
+same disk as the database they protect. One dead disk takes all fifteen copies.
+`npm run backup:supabase` closes that by pushing the whole store to an
+`owner_dashboard` schema in the `MarketingBull-Master-DB` Supabase project.
+
+SQLite stays the system of record. The mirror is a copy — queryable from
+anywhere, and the shape the phase-D2 Supabase sync was always meant to take.
+
+**One-time setup**
+
+1. Apply [`supabase/owner-dashboard-mirror.sql`](supabase/owner-dashboard-mirror.sql)
+   in the Supabase SQL editor. It is idempotent.
+2. Add `owner_dashboard` to Project Settings → API → **Exposed schemas**, or
+   PostgREST answers `PGRST106` and the script says so in as many words.
+3. Put the credentials somewhere root-owned — the systemd unit, or a file that
+   is not this repo. The service-role key is full access to the project:
+
+   ```bash
+   SUPABASE_URL=https://<ref>.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=<service role key>
+   ```
+
+**Running it**
+
+```bash
+npm run backup:supabase -- --dry-run   # counts every table, writes nothing
+npm run backup:supabase                # pushes
+```
+
+Nightly, after the dashboard has settled:
+
+```cron
+30 2 * * * cd /path/to/marketing-bull-owner-dashboard && /usr/bin/npm run backup:supabase >> /var/log/owner-dashboard-backup.log 2>&1
+```
+
+**What it does and does not carry**
+
+- Every entity, ledger, accounting reference, and the hand-typed daily state —
+  including `daily_history`, which exists nowhere else.
+- Deletions propagate. Each run stamps every row with one `synced_at`; rows in
+  the mirror older than that stamp are gone from the source and are removed —
+  but only after that table's writes have all succeeded, so an interrupted run
+  can never empty a table.
+- **Secrets never leave the machine.** `app_settings` is filtered by an
+  allowlist (`mileage.rate`) rather than a denylist, so the ClickUp and maps API
+  keys are excluded, and so is any credential a later feature adds.
+- **Caches are skipped** — `clickup_tasks`, `clickup_sync_state`, and
+  `mileage_route_cache` rebuild themselves from upstream.
+- **Receipt files are not included.** Only `receipt_name` / `receipt_path` are
+  mirrored, so a restore from Supabase alone has the records without the
+  attachments. Copy `receipts/` separately.
+- Every run lands a row in `owner_dashboard.sync_runs` with per-table counts and
+  the source hostname, because a backup nobody can verify is not a backup:
+
+  ```sql
+  select started_at, status, row_counts from owner_dashboard.sync_runs
+  order by started_at desc limit 5;
+  ```
+
+Every mirrored table has RLS enabled with no policies. The service-role key
+bypasses RLS; every other role, including the anon key any client would carry,
+reads nothing. That schema holds contact details, rates, MRR, and client
+addresses — adding a policy is how it stops being private.
+
 ### Location and backups
 
 The database lives at `data/dashboard.sqlite` under the working directory, or
