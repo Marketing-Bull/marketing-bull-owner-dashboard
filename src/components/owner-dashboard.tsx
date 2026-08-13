@@ -338,6 +338,7 @@ export function OwnerDashboard({ version }: { version: string }) {
   // the same values back into the effect below, which would otherwise write
   // them straight back and report "Saved" before the user edited anything.
   const savedSnapshotRef = useRef<string | null>(null);
+  const calendarWidgetRef = useRef<HTMLDivElement | null>(null);
 
   async function fetchDashboardState() {
     setStateError(null);
@@ -585,6 +586,13 @@ export function OwnerDashboard({ version }: { version: string }) {
       collapsed: collapsed.includes(id),
       onToggleCollapse: () => toggleCollapsed(id)
     };
+  }
+
+  function openFullCalendar() {
+    setCalendarExpanded(true);
+    window.setTimeout(() => {
+      calendarWidgetRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
   }
 
   function refreshAll() {
@@ -1163,31 +1171,52 @@ export function OwnerDashboard({ version }: { version: string }) {
     )
   };
 
+  const widgetLayoutClasses: Record<WidgetId, string> = {
+    projects: styles.widgetMatrix,
+    activeProjects: styles.widgetCollections,
+    clients: styles.widgetCollections,
+    mrr: styles.widgetMetric,
+    hours: styles.widgetMetric,
+    calendar: styles.widgetCalendar,
+    goals: styles.widgetGoals,
+    upNext: styles.widgetUpNext,
+    phoneCalls: styles.widgetCalls,
+    whatsImportant: styles.widgetImportant,
+    openSlot: styles.widgetSnapshot
+  };
+
+  const todayEvents = groupedDays[0]?.events ?? [];
+  const focusFields = [
+    manual.hyperfocus.lens,
+    manual.hyperfocus.target,
+    manual.hyperfocus.bottleneck,
+    manual.hyperfocus.multiply.dailyWin,
+    manual.hyperfocus.divide.morning,
+    manual.hyperfocus.divide.midday,
+    manual.hyperfocus.divide.afternoon
+  ];
+  const focusCompletion = Math.round((focusFields.filter((field) => field.trim()).length / focusFields.length) * 100);
+
   return (
     <main className={styles.page}>
       <div className={styles.shell}>
         <header className={styles.header}>
-          <div>
-            <p className={styles.eyebrow}>Marketing Bull / Owner view</p>
-            <h1 className={styles.title}>{dateLabel}</h1>
+          <div className={styles.headerIntro}>
+            <p className={styles.eyebrow}>Marketing Bull · owner workspace</p>
+            <div className={styles.headerTitleRow}>
+              <h1 className={styles.title}>Make the next move count.</h1>
+              <span className={styles.headerDate}>{dateLabel}</span>
+            </div>
             <p className={styles.headerMeta}>
               <Clock size={14} />
               <span className={styles.headerClock}>{clockLabel}</span>
               <span aria-hidden="true">·</span>
               <span>{refreshLabel}</span>
               {saveLabel ? (
-                <>
-                  <span aria-hidden="true">·</span>
-                  {/* Edits autosave, so this is the only thing that tells you it worked. */}
-                  <span className={styles.saveStatus} role="status">
-                    {saveStatus === "saving" ? (
-                      <LoaderCircle size={13} className="spin" />
-                    ) : (
-                      <Check size={13} />
-                    )}
-                    {saveLabel}
-                  </span>
-                </>
+                <span className={styles.saveStatus} role="status">
+                  {saveStatus === "saving" ? <LoaderCircle size={13} className="spin" /> : <Check size={13} />}
+                  {saveLabel}
+                </span>
               ) : null}
               {authConfigured ? null : (
                 <span
@@ -1198,11 +1227,10 @@ export function OwnerDashboard({ version }: { version: string }) {
                   Unprotected
                 </span>
               )}
-              <span aria-hidden="true">·</span>
-              <span>{version}</span>
             </p>
           </div>
           <div className={styles.headerActions}>
+            <span className={styles.versionPill}>{version}</span>
             <button
               type="button"
               className={styles.button}
@@ -1214,9 +1242,149 @@ export function OwnerDashboard({ version }: { version: string }) {
               <RefreshCw size={16} className={isRefreshing ? "spin" : undefined} />
               Refresh
             </button>
-            {/* Tasks and Hermes moved into the shell's External menu section. */}
           </div>
         </header>
+
+        <section className={styles.commandDeck} aria-label="Today’s command desk">
+          <div className={styles.commandMain}>
+            <div className={styles.commandHeading}>
+              <div>
+                <p className={styles.commandEyebrow}>Today’s command desk</p>
+                <h2 className={styles.commandTitle}>Set the outcome, then protect the time.</h2>
+              </div>
+              <span className={styles.completionPill}>{focusCompletion}% planned</span>
+            </div>
+
+            <label className={styles.commandPrimaryField}>
+              <span className={styles.commandFieldLabel}>Primary outcome</span>
+              <input
+                className={styles.commandPrimaryInput}
+                value={manual.hyperfocus.target}
+                placeholder="What must be true by the end of today?"
+                onChange={(event) =>
+                  setManual((current) => ({
+                    ...current,
+                    hyperfocus: { ...current.hyperfocus, target: event.target.value }
+                  }))
+                }
+              />
+            </label>
+
+            <div className={styles.commandFields}>
+              <label className={styles.commandField}>
+                <span className={styles.commandFieldLabel}>Lens</span>
+                <input
+                  className={styles.commandInput}
+                  value={manual.hyperfocus.lens}
+                  placeholder="Your focus lens"
+                  onChange={(event) =>
+                    setManual((current) => ({
+                      ...current,
+                      hyperfocus: { ...current.hyperfocus, lens: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+              <label className={styles.commandField}>
+                <span className={styles.commandFieldLabel}>Bottleneck to clear</span>
+                <input
+                  className={styles.commandInput}
+                  value={manual.hyperfocus.bottleneck}
+                  placeholder="The constraint worth solving"
+                  onChange={(event) =>
+                    setManual((current) => ({
+                      ...current,
+                      hyperfocus: { ...current.hyperfocus, bottleneck: event.target.value }
+                    }))
+                  }
+                />
+              </label>
+            </div>
+
+            <div className={styles.commandSlots}>
+              {(["morning", "midday", "afternoon"] as const).map((slot) => (
+                <label key={slot} className={styles.commandSlot}>
+                  <span className={styles.commandSlotLabel}>{slot}</span>
+                  <input
+                    className={styles.commandSlotInput}
+                    value={manual.hyperfocus.divide[slot]}
+                    placeholder="Protect this block"
+                    onChange={(event) =>
+                      setManual((current) => ({
+                        ...current,
+                        hyperfocus: {
+                          ...current.hyperfocus,
+                          divide: { ...current.hyperfocus.divide, [slot]: event.target.value }
+                        }
+                      }))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+
+            <div className={styles.commandFooter}>
+              <div className={styles.streakBlock}>
+                <span className={styles.commandFieldLabel}>Current streak</span>
+                <strong>{streakLabel}</strong>
+              </div>
+              <label className={styles.dailyWinField}>
+                <span className={styles.commandFieldLabel}>Daily win to repeat</span>
+                <input
+                  className={styles.commandInput}
+                  value={manual.hyperfocus.multiply.dailyWin}
+                  placeholder="The behavior that compounds"
+                  onChange={(event) =>
+                    setManual((current) => ({
+                      ...current,
+                      hyperfocus: {
+                        ...current.hyperfocus,
+                        multiply: { ...current.hyperfocus.multiply, dailyWin: event.target.value }
+                      }
+                    }))
+                  }
+                />
+              </label>
+            </div>
+          </div>
+
+          <aside className={styles.agendaCard}>
+            <div className={styles.agendaHeader}>
+              <div>
+                <p className={styles.commandEyebrow}>Today’s agenda</p>
+                <h2 className={styles.agendaTitle}>{todayEvents.length ? `${todayEvents.length} event${todayEvents.length === 1 ? "" : "s"}` : "Clear calendar"}</h2>
+              </div>
+              <span className={styles.agendaNext}>{nextEvent ? formatEventTime(nextEvent) : "Open"}</span>
+            </div>
+            <div className={styles.agendaList}>
+              {loadingCalendar ? (
+                <div className={styles.loader}><LoaderCircle size={16} /> Loading agenda</div>
+              ) : calendarError ? (
+                <div className={styles.error}>{calendarError}</div>
+              ) : todayEvents.length === 0 ? (
+                <p className={styles.agendaEmpty}>No meetings yet. Keep the important work protected.</p>
+              ) : (
+                todayEvents.slice(0, 4).map((event) => (
+                  <button
+                    key={event.id}
+                    type="button"
+                    className={styles.agendaEvent}
+                    onClick={() => setSelectedCalendarEvent(event)}
+                  >
+                    <span className={styles.agendaTime}>{formatEventTime(event)}</span>
+                    <span className={styles.agendaEventContent}>
+                      <strong>{event.title}</strong>
+                      <span>{event.location || event.calendarName}</span>
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+            <button type="button" className={styles.agendaLink} onClick={openFullCalendar}>
+              Open full calendar <ArrowUpRight size={14} />
+            </button>
+          </aside>
+        </section>
 
         <div className={styles.kpiStrip}>
           {kpis.map((kpi) => (
@@ -1246,6 +1414,14 @@ export function OwnerDashboard({ version }: { version: string }) {
             </div>
           </div>
         ) : null}
+
+        <div className={styles.sectionHeader}>
+          <div>
+            <p className={styles.sectionEyebrow}>Plan with intent</p>
+            <h2 className={styles.sectionTitle}>Daily operating system</h2>
+          </div>
+          <p className={styles.sectionDescription}>Use the full planning canvas when you need to reset the day, remove friction, and work the constraint.</p>
+        </div>
 
         <Card
           title="Daily Hyperfocus System"
@@ -1435,11 +1611,20 @@ export function OwnerDashboard({ version }: { version: string }) {
           </div>
         </Card>
 
-        <div className={styles.grid}>
+        <div className={styles.workspaceHeader}>
+          <div>
+            <p className={styles.sectionEyebrow}>Operate the business</p>
+            <h2 className={styles.sectionTitle}>Your working dashboard</h2>
+          </div>
+          <p className={styles.workspaceHint}>Drag any panel to fit how you work. Your layout and collapsed panels save automatically.</p>
+        </div>
+
+        <div className={`${styles.grid} ${styles.workspaceGrid}`}>
           {widgetOrder.map((widgetId) => (
             <div
               key={widgetId}
-              className={`${styles.widgetSlot} ${draggingWidget === widgetId ? styles.widgetDragging : ""}`}
+              className={`${styles.widgetSlot} ${widgetLayoutClasses[widgetId]} ${draggingWidget === widgetId ? styles.widgetDragging : ""}`}
+              ref={widgetId === "calendar" ? calendarWidgetRef : undefined}
               draggable
               onDragStart={(event) => {
                 setDraggingWidget(widgetId);
