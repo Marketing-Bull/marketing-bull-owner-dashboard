@@ -1,25 +1,43 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { authorizeRequest, isAuthConfigured, isPublicPath, readBearerToken, tokensMatch } from "@/lib/auth";
+import {
+  allowUnprotected,
+  authFailureMessage,
+  authorizeRequest,
+  isAuthConfigured,
+  isPublicPath,
+  readBearerToken,
+  tokensMatch
+} from "@/lib/auth";
 
 /**
  * Cover for the access rules protecting `/api/state`, which reads and writes
  * MRR, goals, and client phone numbers.
  *
- * With no token configured the dashboard is deliberately open, so the cases
- * that matter here are the configured ones: any of them starting to return
- * `allowed: true` without valid credentials is a data leak.
+ * Two directions can fail here and both matter. With a token configured, any
+ * case starting to return `allowed: true` without valid credentials is a data
+ * leak. With no token configured, the default is now LOCKED — an unset
+ * deployment quietly serving everything again is the regression phase 1
+ * exists to prevent — and running open requires the explicit opt-out.
  */
 
 const originalToken = process.env.OWNER_DASHBOARD_AUTH_TOKEN;
+const originalOptOut = process.env.OWNER_DASHBOARD_ALLOW_UNPROTECTED;
 
 afterEach(() => {
   if (originalToken === undefined) delete process.env.OWNER_DASHBOARD_AUTH_TOKEN;
   else process.env.OWNER_DASHBOARD_AUTH_TOKEN = originalToken;
+  if (originalOptOut === undefined) delete process.env.OWNER_DASHBOARD_ALLOW_UNPROTECTED;
+  else process.env.OWNER_DASHBOARD_ALLOW_UNPROTECTED = originalOptOut;
 });
 
 function withToken(token: string | undefined) {
   if (token === undefined) delete process.env.OWNER_DASHBOARD_AUTH_TOKEN;
   else process.env.OWNER_DASHBOARD_AUTH_TOKEN = token;
+}
+
+function withOptOut(value: string | undefined) {
+  if (value === undefined) delete process.env.OWNER_DASHBOARD_ALLOW_UNPROTECTED;
+  else process.env.OWNER_DASHBOARD_ALLOW_UNPROTECTED = value;
 }
 
 describe("tokensMatch", () => {
@@ -55,18 +73,77 @@ describe("isAuthConfigured", () => {
   });
 });
 
+describe("allowUnprotected", () => {
+  it("is off unless explicitly switched on", () => {
+    withOptOut(undefined);
+    expect(allowUnprotected()).toBe(false);
+    withOptOut("");
+    expect(allowUnprotected()).toBe(false);
+    withOptOut("0");
+    expect(allowUnprotected()).toBe(false);
+    withOptOut("false");
+    expect(allowUnprotected()).toBe(false);
+  });
+
+  it("accepts the usual truthy spellings", () => {
+    for (const value of ["1", "true", "TRUE", "yes", " 1 "]) {
+      withOptOut(value);
+      expect(allowUnprotected(), value).toBe(true);
+    }
+  });
+});
+
 describe("authorizeRequest", () => {
   describe("with no token configured", () => {
-    it("lets every request through, since there is nothing to sign in with", () => {
+    it("locks every request by default — there is nothing to sign in with", () => {
       withToken(undefined);
+      withOptOut(undefined);
+      expect(authorizeRequest({ cookieToken: undefined, bearerToken: undefined })).toEqual({
+        allowed: false,
+        reason: "not-configured"
+      });
+    });
+
+    it("stays locked even if a stale cookie or bearer token is presented", () => {
+      withToken(undefined);
+      withOptOut(undefined);
       expect(
-        authorizeRequest({ cookieToken: undefined, bearerToken: undefined })
-      ).toEqual({ allowed: true });
+        authorizeRequest({ cookieToken: "left-over-cookie", bearerToken: "whatever" }).allowed
+      ).toBe(false);
     });
 
     it("treats a whitespace-only token as unset", () => {
       withToken("   ");
-      expect(authorizeRequest({ cookieToken: undefined, bearerToken: undefined }).allowed).toBe(true);
+      withOptOut(undefined);
+      expect(authorizeRequest({ cookieToken: undefined, bearerToken: undefined })).toEqual({
+        allowed: false,
+        reason: "not-configured"
+      });
+    });
+
+    it("opens only under the explicit opt-out", () => {
+      withToken(undefined);
+      withOptOut("1");
+      expect(authorizeRequest({ cookieToken: undefined, bearerToken: undefined })).toEqual({
+        allowed: true
+      });
+    });
+
+    it("describes the locked state as setup, not as bad credentials", () => {
+      expect(authFailureMessage("not-configured")).toMatch(/OWNER_DASHBOARD_AUTH_TOKEN/);
+      expect(authFailureMessage("invalid-credentials")).toBe("Authentication required.");
+    });
+  });
+
+  describe("with a token configured, opt-out must be irrelevant", () => {
+    it("still requires credentials even if the opt-out is set", () => {
+      withToken("s3cret");
+      withOptOut("1");
+      expect(authorizeRequest({ cookieToken: undefined, bearerToken: undefined })).toEqual({
+        allowed: false,
+        reason: "invalid-credentials"
+      });
+      expect(authorizeRequest({ cookieToken: "s3cret", bearerToken: undefined }).allowed).toBe(true);
     });
   });
 

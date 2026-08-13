@@ -1,10 +1,21 @@
 import { NextResponse } from "next/server";
-import { AUTH_COOKIE_NAME, getConfiguredToken, tokensMatch } from "@/lib/auth";
+import { allowUnprotected, AUTH_COOKIE_NAME, getConfiguredToken, tokensMatch } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 /** Cookie lifetime. Long enough that the installed PWA is not a daily login chore. */
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+
+/**
+ * Public probe for the login page: is there anything to sign in with?
+ * Deliberately reveals nothing beyond what the page's own behaviour shows.
+ */
+export async function GET() {
+  return NextResponse.json(
+    { authConfigured: getConfiguredToken() !== null, allowUnprotected: allowUnprotected() },
+    { headers: { "Cache-Control": "no-store" } }
+  );
+}
 
 export async function POST(request: Request) {
   const expected = getConfiguredToken();

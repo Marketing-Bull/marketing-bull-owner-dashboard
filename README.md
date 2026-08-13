@@ -54,19 +54,20 @@ This sits above the operational widgets so the dashboard is not just a reporting
 
 ## Access Control
 
-Access is gated in `src/proxy.ts`, but only when a token is configured:
+Access is gated in `src/proxy.ts`. Three states:
 
-| `OWNER_DASHBOARD_AUTH_TOKEN` | Behavior |
+| Configuration | Behavior |
 | --- | --- |
-| **unset (default)** | **The dashboard is open — anyone who can reach the address can read and edit it.** The header shows an "Unprotected" chip so this is visible rather than silent. |
-| set | Every page and API request needs the token, entered once at `/login` (stored in an httpOnly cookie) or sent as `Authorization: Bearer <token>`. |
+| `OWNER_DASHBOARD_AUTH_TOKEN` set | Every page and API request needs the token, entered once at `/login` (stored in an httpOnly cookie) or sent as `Authorization: Bearer <token>`. |
+| **nothing set (default)** | **The dashboard is locked.** Pages land on a setup screen, APIs answer 503, and no data is served or written. |
+| `OWNER_DASHBOARD_ALLOW_UNPROTECTED=1`, no token | The old open behavior, chosen explicitly: anyone who can reach the address can read and edit everything, and the header shows an "Unprotected" chip. For a laptop, not for anything other machines can reach. |
 
-Unset is the default so the app runs with no configuration. That is fine on a
-laptop. It is not fine on anything reachable by other machines: this screen
-holds MRR, projections, goals, and client phone numbers, and `/api/state`
-accepts writes as well as reads.
+Locked became the default in consolidation phase 1: this store holds MRR,
+projections, goals, and client phone numbers today, and is about to hold client
+rates and financial entries. An unconfigured deployment quietly serving all of
+that is the failure mode; now it cannot.
 
-To protect it, set the variable and restart:
+To unlock, set the variable and restart:
 
 ```bash
 # in the project root; .env.local is gitignored
@@ -86,8 +87,11 @@ curl -H "Authorization: Bearer $OWNER_DASHBOARD_AUTH_TOKEN" http://host:3018/api
 ```
 
 `POST /api/login` exchanges the token for the session cookie; `DELETE /api/login`
-clears it. Verify the gate is live with `curl -o /dev/null -w '%{http_code}'
-http://localhost:3018/api/state` — 401 means it is on.
+clears it; `GET /api/login` reports `authConfigured` so the login page can show
+setup instructions instead of a dead form. Verify the gate with
+`curl -o /dev/null -w '%{http_code}' http://localhost:3018/api/state` —
+401 means the token gate is on, 503 means locked-awaiting-setup, and 200
+without credentials means the explicit opt-out is active.
 
 ## Current API Behavior
 
@@ -96,12 +100,14 @@ http://localhost:3018/api/state` — 401 means it is on.
 - Returns `history`: the last 365 days of daily rows, oldest first
 - Returns `streak`: consecutive days ending today with a daily win recorded
 - Also returns `authConfigured`, which drives the header's "Unprotected" chip
-- Requires auth only when a token is configured (see Access Control)
+- Gated per Access Control: token required when set, 503 when locked, open only
+  under the explicit opt-out
 
 ### `PUT /api/state`
 - Saves dashboard state back to SQLite
 - Also writes (or rewrites) today's `daily_history` row, in the same transaction
-- Requires auth only when a token is configured (see Access Control)
+- The first save of each local day snapshots the database to `backups/` first
+- Gated the same way as the GET
 
 ### `GET /api/dashboard`
 - If `OWNER_DASHBOARD_DATA_URL` is set, proxies that upstream endpoint
@@ -168,10 +174,33 @@ Today being blank does not — counting starts at yesterday in that case, so the
 streak does not read as broken every morning before the win is filled in. Typing
 a win updates the number immediately rather than waiting out the save debounce.
 
-Upgrading an existing database needs no manual step: `CREATE TABLE IF NOT
-EXISTS` covers a new table (unlike a new *column*, which is what
-`applyMigrations()` is for), and history simply starts from the first save after
-the upgrade.
+Upgrading an existing database needs no manual step: opening it runs any
+pending migrations, and history simply starts from the first save after the
+upgrade.
+
+### Migrations
+
+Schema changes go through `src/lib/migrations.ts` (consolidation phase 1):
+an ordered list of one-shot migrations, each applied inside a transaction and
+recorded in `schema_migrations`, so a database always knows what has been
+applied to it and a failure rolls back cleanly instead of leaving the schema
+half-changed.
+
+The first entry, `001-baseline`, is deliberately idempotent (IF NOT EXISTS
+plus a conditional column add) because it adopts live databases created across
+three earlier schema generations. It is the only migration allowed that shape —
+everything after it runs against a known state and must be a plain, run-once
+migration.
+
+### Location and backups
+
+The database lives at `data/dashboard.sqlite` under the working directory, or
+wherever `OWNER_DASHBOARD_DB_PATH` points. The first save of each local day
+snapshots the database (SQLite `VACUUM INTO`) to a `backups/` directory next to
+it — taken *before* that save applies, so day N's snapshot is the state as day
+N-1 left it. The newest 14 snapshots are kept. A backup failure is logged
+loudly but never blocks the save. Restoring is: stop the server, copy the
+snapshot over `dashboard.sqlite`, start.
 
 ## Versioning
 
@@ -198,13 +227,16 @@ This means the dashboard can be installed and reopened more like an app.
 
 ```bash
 npm install
+# pick one: run open on this machine only…
+echo 'OWNER_DASHBOARD_ALLOW_UNPROTECTED=1' >> .env.local
+# …or set a real token
+echo "OWNER_DASHBOARD_AUTH_TOKEN=$(openssl rand -base64 32)" >> .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. No token is needed — the dashboard is open by
-default. Copy `.env.example` to `.env.local` and set
-`OWNER_DASHBOARD_AUTH_TOKEN` before exposing it to anything beyond your own
-machine.
+Open `http://localhost:3000`. With neither variable set the dashboard is
+locked and shows setup instructions instead of data — that is the default
+doing its job, not a bug.
 
 Node >= 22.5 is required — `src/lib/dashboard-state.ts` uses `node:sqlite`.
 
@@ -241,8 +273,10 @@ bugs that actually shipped rather than at coverage for its own sake:
   is invisible when tested only in UTC.
 - `dashboard-data.test.ts` — payload normalization against malformed upstream
   responses, including the exact body that used to white-screen the dashboard.
-- `auth.test.ts` — the access-control decision matrix. With a token set, any
-  case starting to allow a request without credentials is a data leak.
+- `auth.test.ts` — the access-control decision matrix, in both directions: with
+  a token set, any case starting to allow a request without credentials is a
+  data leak; with nothing set, any case starting to allow one is the locked
+  default silently reverting to open.
 - `dashboard-layout.test.ts` — the collapsible-panel id set.
 - `dashboard-save.test.ts` — the autosave decision, in both directions.
 - `clickup.test.ts` — status selection for the write-back, weighted toward the
@@ -256,14 +290,19 @@ bugs that actually shipped rather than at coverage for its own sake:
   counted off rows that did not round-trip is wrong in a way that testing the
   pure counting rules cannot catch.
 - `dashboard-history-upgrade.test.ts` — reading and saving against a database
-  written by the pre-history schema. The live dashboard's SQLite file predates
-  all of this, so "works on a fresh database" proves nothing about the only
-  database that matters.
+  written by the pre-history schema, which now also proves the migration runner
+  adopts a legacy file: baseline applied and recorded, old rows intact. The
+  live dashboard's SQLite file predates all of this, so "works on a fresh
+  database" proves nothing about the only database that matters.
+- `migrations.test.ts` — the runner itself, weighted toward failure: a failing
+  migration must roll back entirely and stay unrecorded, and the ones after it
+  must not run.
+- `backup.test.ts` — the daily snapshot round-trips through real SQLite and the
+  prune never deletes a file it does not recognise.
 
-The two database suites `chdir` into a temp directory before importing
-`dashboard-state.ts`, since it resolves its path from cwd at module load. Vitest
-forks each test file into its own process, so that cannot reach another suite —
-and it means `npm test` never touches the real `data/dashboard.sqlite`.
+The database suites point `OWNER_DASHBOARD_DB_PATH` at a temp directory before
+importing `dashboard-state.ts`, so `npm test` never touches the real
+`data/dashboard.sqlite`.
 
 ## Production / Current Live Host
 
@@ -304,9 +343,11 @@ ClickUp source ids when it stops being one.
 - `src/lib/clickup.ts`
 - `src/lib/dashboard-data.ts`
 - `src/lib/dashboard-layout.ts`
+- `src/lib/backup.ts`
 - `src/lib/dashboard-state.ts`
 - `src/lib/fallback.ts`
 - `src/lib/history.ts`
+- `src/lib/migrations.ts`
 - `src/lib/sample-data.ts`
 - `src/lib/types.ts`
 
@@ -314,12 +355,11 @@ ClickUp source ids when it stops being one.
 
 Known and deliberate, roughly in the order they are worth fixing:
 
-- **The app only runs on one machine.** The ClickUp key is read from
-  `~/.openclaw/secrets.json`, the calendar shells out to `~/.local/bin/gog`, and
-  SQLite lives at `cwd()/data` with no backup. Reading `CLICKUP_API_KEY` from
-  env (falling back to the secrets file) and making the database path
-  configurable is the smallest change that unblocks running this anywhere else —
-  and would let the database tests drop their `chdir`.
+- **The live integrations only run on one machine.** The ClickUp key is read
+  from `~/.openclaw/secrets.json` and the calendar shells out to
+  `~/.local/bin/gog`. Reading `CLICKUP_API_KEY` from env (falling back to the
+  secrets file) is the smallest remaining change — the database side is solved
+  (`OWNER_DASHBOARD_DB_PATH`, daily backups, migration runner).
 - **`Up Next` ranking is heuristic, and its lens weighting does not work.** In
   `scoreTaskAgainstBottleneck`, lens matches are meant to score 2 against 4 for
   everything else, but a single token is compared against the whole `lens`
@@ -345,5 +385,7 @@ Known and deliberate, roughly in the order they are worth fixing:
   drag-and-drop, and the ClickUp write-back — which is where the shipped bugs
   were. Extracting the fetch/save orchestration into a hook would make it
   testable and shrink the file at the same time.
-- The dashboard ships unprotected by default; `OWNER_DASHBOARD_AUTH_TOKEN` has
-  to be set deliberately before exposing it beyond localhost.
+- ~~The dashboard ships unprotected by default~~ — fixed in consolidation
+  phase 1: unset now means locked, and running open requires the explicit
+  `OWNER_DASHBOARD_ALLOW_UNPROTECTED=1`. The live host still needs a real
+  token set at deploy time.

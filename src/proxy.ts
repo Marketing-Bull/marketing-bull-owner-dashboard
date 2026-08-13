@@ -8,12 +8,16 @@ import {
 } from "@/lib/auth";
 
 /**
- * Gates the dashboard and every private API route, but only when
- * `OWNER_DASHBOARD_AUTH_TOKEN` is set. With no token configured every request
- * passes through, so the app runs with zero configuration.
+ * Gates the dashboard and every private API route.
  *
- * Page requests are redirected to `/login`; API requests get a 401 so the
- * client surfaces a real error instead of rendering a login page as JSON.
+ * Three states, decided in `@/lib/auth`: token set -> credentials required;
+ * token unset -> locked (setup needed); token unset with the explicit
+ * `OWNER_DASHBOARD_ALLOW_UNPROTECTED` opt-out -> open.
+ *
+ * Page requests are redirected to `/login`, which doubles as the setup screen
+ * when no token exists. API requests get JSON — 401 for bad credentials, 503
+ * for the locked state, since "nothing is configured to sign in with" is a
+ * server condition, not a caller mistake.
  *
  * Uses Next 16's `proxy` file convention; `middleware.ts` is deprecated.
  */
@@ -35,8 +39,11 @@ export function proxy(request: NextRequest) {
 
   if (pathname.startsWith("/api/")) {
     return NextResponse.json(
-      { error: authFailureMessage() },
-      { status: 401, headers: { "Cache-Control": "no-store" } }
+      { error: authFailureMessage(decision.reason) },
+      {
+        status: decision.reason === "not-configured" ? 503 : 401,
+        headers: { "Cache-Control": "no-store" }
+      }
     );
   }
 
