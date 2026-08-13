@@ -5,9 +5,11 @@ import { Copy, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { DataTable, type LedgerColumn } from "@/components/transactions/data-table";
 import { DeleteDialog } from "@/components/transactions/delete-dialog";
 import { FilterBar, FilterField, type ActiveFilter } from "@/components/transactions/filter-bar";
+import { HoursField } from "@/components/transactions/hours-field";
 import { RecordSheet } from "@/components/transactions/record-sheet";
 import { TransactionPage, TransactionPageHeader } from "@/components/transactions/transaction-page";
 import styles from "@/components/transactions/transaction-ledger.module.css";
+import { formatHours, MAX_HOURS, parseHoursInput } from "@/lib/hours-input";
 import type { Client, Project, TimeEntry, TimeEntryRecentDefaults } from "@/lib/types";
 
 type TimeSort = "date" | "hours" | "rate" | "amount" | "details" | "billable" | "startTime" | "endTime" | "createdAt" | "updatedAt";
@@ -136,7 +138,7 @@ function blankForm(defaults: TimeEntryRecentDefaults | null): FormValues {
 function entryForm(entry: TimeEntry, duplicate = false): FormValues {
   return {
     date: duplicate ? todayKey() : entry.date,
-    hours: String(entry.hours),
+    hours: formatHours(entry.hours),
     clientId: entry.clientId ?? "",
     projectId: entry.projectId ?? "",
     billable: entry.billable,
@@ -149,7 +151,8 @@ function entryForm(entry: TimeEntry, duplicate = false): FormValues {
 function payload(values: FormValues) {
   return {
     date: values.date,
-    hours: Number(values.hours),
+    // The form refuses to submit unparseable hours, so this always resolves.
+    hours: parseHoursInput(values.hours) ?? 0,
     clientId: values.clientId || null,
     projectId: values.projectId || null,
     billable: values.billable,
@@ -218,12 +221,14 @@ function TimeForm({
   onSubmit: (values: FormValues, addAnother: boolean) => void;
 }) {
   const [values, setValues] = useState(initial);
+  const [hoursError, setHoursError] = useState("");
   const dirty = JSON.stringify(values) !== JSON.stringify(initial);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const selectedProject = projects.find((project) => project.id === values.projectId);
   const selectedClient = clients.find((client) => client.id === values.clientId);
   const rate = frozenRate ?? selectedProject?.hourlyRateOverride ?? selectedClient?.hourlyRate ?? 0;
-  const estimated = Number(values.hours) > 0 ? Number(values.hours) * rate : 0;
+  const hours = parseHoursInput(values.hours);
+  const estimated = (hours ?? 0) * rate;
   const selectableProjects = projects.filter((project) => !values.clientId || project.clientId === values.clientId || project.id === values.projectId);
 
   return (
@@ -232,6 +237,11 @@ function TimeForm({
       className={styles.sheetForm}
       onSubmit={(event) => {
         event.preventDefault();
+        if (hours === null) {
+          setHoursError(`Enter hours as 1.35, 1:21, or 90m — more than 0 and up to ${MAX_HOURS}.`);
+          (event.currentTarget.querySelector("input[inputmode=decimal]") as HTMLInputElement | null)?.focus();
+          return;
+        }
         const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
         onSubmit(values, submitter?.value === "another");
       }}
@@ -240,10 +250,11 @@ function TimeForm({
         <span className={styles.fieldLabel}>Date</span>
         <input className={styles.input} type="date" value={values.date} required onChange={(event) => setValues((current) => ({ ...current, date: event.target.value }))} />
       </label>
-      <label className={styles.sheetField}>
-        <span className={styles.fieldLabel}>Hours</span>
-        <input className={styles.input} type="number" inputMode="decimal" min="0.01" max="24" step="0.01" value={values.hours} required autoFocus onChange={(event) => setValues((current) => ({ ...current, hours: event.target.value }))} />
-      </label>
+      <HoursField
+        value={values.hours}
+        error={hoursError}
+        onChange={(next) => { setHoursError(""); setValues((current) => ({ ...current, hours: next })); }}
+      />
       <label className={styles.sheetField}>
         <span className={styles.fieldLabel}>Client</span>
         <select className={styles.select} value={values.clientId} onChange={(event) => {
@@ -278,7 +289,7 @@ function TimeForm({
       </label>
       <div className={styles.calculation} aria-label="Time value calculation">
         <div><strong>{money(rate)}/hr</strong><span>{frozenRate === undefined ? "Rate at save" : "Frozen rate"}</span></div>
-        <div><strong>Estimated {money(estimated)}</strong><span>{Number(values.hours || 0).toFixed(2)} hrs × {money(rate)}</span></div>
+        <div><strong>Estimated {money(estimated)}</strong><span>{(hours ?? 0).toFixed(2)} hrs × {money(rate)}</span></div>
       </div>
       <details className={styles.detailsDisclosure}>
         <summary>More details</summary>

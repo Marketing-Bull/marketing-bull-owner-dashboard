@@ -76,7 +76,9 @@
 .iconButton,
 .pageButton,
 .filterChip,
-.sortButton {
+.sortButton,
+.chip,
+.stepButton {
   border: 1px solid var(--line);
   background: var(--panel-strong);
   color: var(--text);
@@ -567,6 +569,64 @@
   accent-color: var(--accent);
 }
 
+.hoursLabel {
+  display: block;
+}
+
+.hoursRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hoursRow .input {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.stepButton {
+  width: 46px;
+  min-height: 42px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  min-height: 36px;
+  border-radius: 9px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.chipActive {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.chip:focus-visible,
+.stepButton:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.fieldError {
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .calculation {
   grid-column: 1 / -1;
   display: grid;
@@ -888,8 +948,19 @@
   .quietButton,
   .dangerButton,
   .input,
-  .select {
+  .select,
+  .stepButton {
     min-height: 46px;
+  }
+
+  .stepButton {
+    width: 52px;
+  }
+
+  .chip {
+    min-height: 44px;
+    padding: 0 16px;
+    font-size: 15px;
   }
 
   .filterSurface {
