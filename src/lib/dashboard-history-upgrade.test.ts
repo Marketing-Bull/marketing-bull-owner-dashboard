@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
-import { DEFAULT_WIDGET_ORDER } from "@/lib/dashboard-layout";
+import { DEFAULT_WIDGET_ORDER, LEGACY_WIDGET_ORDER } from "@/lib/dashboard-layout";
 
 describe("existing database without daily_history", () => {
   it("gains the table and keeps its old rows", async () => {
@@ -65,7 +65,7 @@ describe("existing database without daily_history", () => {
       "kept whats important",
       // Old hyperfocus JSON still carries the retired streakDays field.
       JSON.stringify({ ...DEFAULT_MANUAL_STATE.hyperfocus, multiply: { streakDays: "5", dailyWin: "kept win" } }),
-      JSON.stringify(DEFAULT_WIDGET_ORDER)
+      JSON.stringify(LEGACY_WIDGET_ORDER)
     );
     old.close();
 
@@ -78,6 +78,7 @@ describe("existing database without daily_history", () => {
     expect(state.manual.whatsImportant).toBe("kept whats important");
     expect(state.manual.goals[0]).toBe("kept goal a");
     expect(state.manual.hyperfocus.multiply.dailyWin).toBe("kept win");
+    expect(state.widgetOrder).toEqual(DEFAULT_WIDGET_ORDER);
     // The retired field is dropped on read rather than carried forward.
     expect("streakDays" in state.manual.hyperfocus.multiply).toBe(false);
 
@@ -96,7 +97,13 @@ describe("existing database without daily_history", () => {
     const recorded = upgraded
       .prepare("SELECT id FROM schema_migrations ORDER BY id")
       .all() as Array<{ id: string }>;
-    expect(recorded.map((row) => row.id)).toEqual(["001-baseline", "002-clients-projects"]);
+    expect(recorded.map((row) => row.id)).toEqual([
+      "001-baseline",
+      "002-clients-projects",
+      "003-time-entries",
+      "004-clickup-task-cache",
+      "005-app-settings"
+    ]);
     upgraded.close();
 
     // And the first save also produced the day's backup next to the database.

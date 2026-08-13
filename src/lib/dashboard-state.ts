@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { cwd } from "node:process";
 import {
   DEFAULT_WIDGET_ORDER,
+  LEGACY_WIDGET_ORDER,
   isCollapsibleId,
   type CollapsibleId,
   type WidgetId
@@ -89,6 +90,12 @@ function normalizeWidgetOrder(value: unknown): WidgetId[] {
   if (!Array.isArray(value)) return [...DEFAULT_WIDGET_ORDER];
   const valid = value.filter((entry): entry is WidgetId => DEFAULT_WIDGET_ORDER.includes(entry as WidgetId));
   const deduped = Array.from(new Set(valid));
+  if (
+    deduped.length === LEGACY_WIDGET_ORDER.length &&
+    deduped.every((id, index) => id === LEGACY_WIDGET_ORDER[index])
+  ) {
+    return [...DEFAULT_WIDGET_ORDER];
+  }
   const missing = DEFAULT_WIDGET_ORDER.filter((id) => !deduped.includes(id));
   return [...deduped, ...missing];
 }

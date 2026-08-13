@@ -8,27 +8,27 @@ export const DEFAULT_MANUAL_STATE: ManualState = {
   },
   hyperfocus: {
     lens: "Work",
-    target: "Use one screen to run the day without tab switching.",
-    why: "Less drag at task start means faster decisions and cleaner follow-through.",
-    bottleneck: "Too many active surfaces mean priorities get diluted before work begins.",
+    target: "Keep clients, projects, tasks, time, calls, and calendar in one operating view.",
+    why: "The dashboard should show the tables Marketing Bull owns and the feeds it reads.",
+    bottleneck: "The next project decision is unclear.",
     subtract: [
-      "Close tabs and tools that are not needed for today's bottleneck.",
-      "Kill low-value admin before opening creative/client work.",
-      "Remove ambiguous tasks that are really waiting on a decision."
+      "Archive stale projects instead of letting them look active.",
+      "Assign unassigned projects to the right client.",
+      "Move non-owner tasks out of the active queue."
     ],
     divide: {
-      morning: "Clarity + bottleneck clearing",
-      midday: "Calls, approvals, and calendar-bound work",
-      afternoon: "Execution blocks and cleanup"
+      morning: "Review clients, projects, and blockers",
+      midday: "Calls, approvals, and scheduled work",
+      afternoon: "Project execution and time cleanup"
     },
     multiply: {
-      dailyWin: "Start with the bottleneck before checking everything else."
+      dailyWin: "Updated the project queue and recorded the next owner action."
     }
   },
   goals: [
-    "Clear the real bottleneck, not the loudest task",
-    "Convert the top live priority into a finished deliverable",
-    "End the day with tomorrow already divided"
+    "Assign every active project to a client",
+    "Mark the urgent and important flags honestly",
+    "Close or move the next ClickUp task"
   ],
   phoneCalls: {
     toMake: [
@@ -40,7 +40,7 @@ export const DEFAULT_MANUAL_STATE: ManualState = {
     ]
   },
   whatsImportant:
-    "What matters today is clearing the single bottleneck that unlocks the rest of the queue."
+    "What matters today is keeping the client and project records honest enough to run the day from this screen."
 };
 
 export const SAMPLE_DASHBOARD_DATA: DashboardData = {

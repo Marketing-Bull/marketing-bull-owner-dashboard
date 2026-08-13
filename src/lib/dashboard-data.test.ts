@@ -77,6 +77,26 @@ describe("normalizeDashboardData", () => {
     expect(normalizeDashboardData({}).fallbackReason).toBeUndefined();
   });
 
+  it("carries ClickUp sync metadata through so the UI can show cache age", () => {
+    const result = normalizeDashboardData({
+      clickUpSync: {
+        lastSyncedAt: "2026-08-13T12:00:00.000Z",
+        lastAttemptedAt: "2026-08-13T13:00:00.000Z",
+        stale: true,
+        refreshed: false,
+        error: "ClickUp returned 500"
+      }
+    });
+
+    expect(result.clickUpSync).toEqual({
+      lastSyncedAt: "2026-08-13T12:00:00.000Z",
+      lastAttemptedAt: "2026-08-13T13:00:00.000Z",
+      stale: true,
+      refreshed: false,
+      error: "ClickUp returned 500"
+    });
+  });
+
   it("coerces unusable numbers rather than rendering NaN", () => {
     const result = normalizeDashboardData({ hours: { week: [{ label: "Admin", hours: "lots" }], month: [] } });
     expect(result.hours.week).toEqual([{ label: "Admin", hours: 0 }]);

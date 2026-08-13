@@ -13,9 +13,7 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
-  ShieldAlert,
-  Target,
-  TrendingUp
+  ShieldAlert
 } from "lucide-react";
 import styles from "./owner-dashboard.module.css";
 import { buildDayColumns, dayKey } from "@/lib/calendar-days";
@@ -46,14 +44,22 @@ import type {
   UpNextTask
 } from "@/lib/types";
 
-function formatMoney(value: string): string {
-  const numeric = Number(value.replace(/[^0-9.-]/g, ""));
-  if (!Number.isFinite(numeric)) return "$0";
+function formatMoneyNumber(value: number): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0
-  }).format(numeric);
+  }).format(value);
+}
+
+function formatMoney(value: string): string {
+  const numeric = Number(value.replace(/[^0-9.-]/g, ""));
+  if (!Number.isFinite(numeric)) return "$0";
+  return formatMoneyNumber(numeric);
+}
+
+function statusText(value: string): string {
+  return value.replace("_", " ");
 }
 
 /**
@@ -97,6 +103,12 @@ function formatDateCompact(timestamp: number): string {
     month: "short",
     day: "numeric"
   }).format(timestamp);
+}
+
+function formatIsoClock(value: string | null | undefined): string {
+  if (!value) return "never";
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? formatClock(timestamp) : "unknown";
 }
 
 /** Days shown in the calendar widget: today plus the next two. */
@@ -154,7 +166,6 @@ function PriorityBadge({ priority }: { priority: UpNextTask["priority"] }) {
 
 function Card({
   title,
-  eyebrow,
   action,
   dragLabel,
   className,
@@ -164,7 +175,6 @@ function Card({
   children
 }: {
   title: string;
-  eyebrow: string;
   action?: React.ReactNode;
   dragLabel?: string;
   className?: string;
@@ -176,8 +186,7 @@ function Card({
   return (
     <section className={`${styles.card} ${collapsed ? styles.cardCollapsed : ""} ${className || ""}`}>
       <div className={styles.cardHeader}>
-        <div>
-          <p className={styles.cardEyebrow}>{eyebrow}</p>
+        <div className={styles.cardTitleWrap}>
           <h2 className={styles.cardTitle}>{title}</h2>
         </div>
         <div className={styles.cardActions}>
@@ -232,7 +241,6 @@ function formatEventDateTimeRange(event: CalendarEvent): string {
 
 function CollectionCard({
   title,
-  eyebrow,
   dragLabel,
   loadingLabel,
   emptyLabel,
@@ -243,7 +251,6 @@ function CollectionCard({
   collapseProps
 }: {
   title: string;
-  eyebrow: string;
   dragLabel: string;
   loadingLabel: string;
   emptyLabel?: string;
@@ -257,7 +264,6 @@ function CollectionCard({
   return (
     <Card
       title={title}
-      eyebrow={eyebrow}
       dragLabel={dragLabel}
       {...collapseProps}
       action={
@@ -622,8 +628,27 @@ export function OwnerDashboard({ version }: { version: string }) {
 
   const isRefreshing = loadingDashboard || loadingCalendar || loadingState || loadingEntities;
 
-  // Local entities, shaped for the chip widgets. Active first, capped so the
-  // widget stays a glance; the full lists live on /clients and /projects.
+  const activeClients = useMemo(
+    () => localClients.filter((client) => !client.isArchived && client.status === "active"),
+    [localClients]
+  );
+  const activeProjects = useMemo(
+    () => localProjects.filter((project) => !project.isArchived && project.status === "active"),
+    [localProjects]
+  );
+  const clientMrr = useMemo(
+    () =>
+      activeClients.reduce(
+        (total, client) => total + (client.paymentType === "mrr" ? client.mrr ?? 0 : 0),
+        0
+      ),
+    [activeClients]
+  );
+  const prospectCount = localClients.filter((client) => !client.isArchived && client.status === "prospect").length;
+  const unassignedProjects = activeProjects.filter((project) => project.clientId === null).length;
+
+  // Local entities, shaped for the glance widgets. Full CRUD lives on
+  // /clients and /projects.
   const clientNameById = useMemo(
     () => new Map(localClients.map((client) => [client.id, client.name])),
     [localClients]
@@ -634,7 +659,7 @@ export function OwnerDashboard({ version }: { version: string }) {
         id: client.id,
         title: client.name,
         subtitle: [
-          client.status.replace("_", " "),
+          statusText(client.status),
           client.mrr ? `${formatMoney(String(client.mrr))}/mo` : null
         ]
           .filter(Boolean)
@@ -644,8 +669,7 @@ export function OwnerDashboard({ version }: { version: string }) {
   );
   const projectChips = useMemo(
     () =>
-      localProjects
-        .filter((project) => project.status === "active")
+      activeProjects
         .slice(0, 6)
         .map((project) => ({
           id: project.id,
@@ -654,7 +678,36 @@ export function OwnerDashboard({ version }: { version: string }) {
             ? clientNameById.get(project.clientId) ?? "Unknown client"
             : "Unassigned"
         })),
-    [localProjects, clientNameById]
+    [activeProjects, clientNameById]
+  );
+  const projectPriorityBuckets = useMemo(
+    () => [
+      {
+        key: "now",
+        title: "Urgent and important",
+        note: "Needs owner action",
+        projects: activeProjects.filter((project) => project.urgent && project.important)
+      },
+      {
+        key: "planned",
+        title: "Important",
+        note: "Protect time for it",
+        projects: activeProjects.filter((project) => !project.urgent && project.important)
+      },
+      {
+        key: "handoff",
+        title: "Urgent",
+        note: "Move or delegate",
+        projects: activeProjects.filter((project) => project.urgent && !project.important)
+      },
+      {
+        key: "backlog",
+        title: "Backlog",
+        note: "Active, not flagged",
+        projects: activeProjects.filter((project) => !project.urgent && !project.important)
+      }
+    ],
+    [activeProjects]
   );
 
   // `now` stays null through SSR and the first client render so the clock never
@@ -678,9 +731,23 @@ export function OwnerDashboard({ version }: { version: string }) {
         ? `Saved ${formatClock(lastSavedAt)}`
         : null;
 
-  const p0Count = dashboardData?.priorities.find((bucket) => bucket.key === "P0")?.projects.length ?? 0;
   const weekHours = (dashboardData?.hours.week ?? []).reduce((total, entry) => total + entry.hours, 0);
   const openTasks = dashboardData?.upNext.filter((task) => !task.done).length ?? 0;
+  const clickUpSync = dashboardData?.clickUpSync;
+  const clickUpSyncLabel = loadingDashboard
+    ? "Syncing"
+    : clickUpSync?.error
+      ? "Sync error"
+      : clickUpSync?.lastSyncedAt
+        ? `${clickUpSync.stale ? "Stale" : "Synced"} ${formatIsoClock(clickUpSync.lastSyncedAt)}`
+        : "Not synced";
+  const clickUpSyncHint = clickUpSync?.error
+    ? clickUpSync.lastSyncedAt
+      ? `using cached tasks from ${formatIsoClock(clickUpSync.lastSyncedAt)}`
+      : "showing sample tasks"
+    : clickUpSync?.lastSyncedAt
+      ? `synced ${formatIsoClock(clickUpSync.lastSyncedAt)}`
+      : "not synced yet";
 
   // Gated on `now` for the same hydration reason, and so "next" means next
   // relative to the ticking clock rather than page load.
@@ -711,31 +778,31 @@ export function OwnerDashboard({ version }: { version: string }) {
 
   const kpis = [
     {
-      label: "MRR",
-      value: formatMoney(manual.mrr.current),
-      hint: `${manual.mrr.momDelta}% MoM · proj ${formatMoney(manual.mrr.projected)}`,
+      label: "Client MRR",
+      value: loadingEntities ? "—" : formatMoneyNumber(clientMrr),
+      hint: `${activeClients.length} active · ${prospectCount} prospects`,
       title: undefined as string | undefined
     },
     {
-      label: "P0 critical",
-      value: loadingDashboard ? "—" : String(p0Count),
-      hint: p0Count === 0 ? "nothing critical" : "projects need you",
+      label: "Projects",
+      value: loadingEntities ? "—" : String(activeProjects.length),
+      hint: unassignedProjects === 0 ? "all assigned" : `${unassignedProjects} unassigned`,
       title: undefined
     },
     {
-      label: "Open in Up Next",
+      label: "ClickUp Tasks",
       value: loadingDashboard ? "—" : String(openTasks),
-      hint: "tasks queued",
+      hint: clickUpSyncHint,
       title: undefined
     },
     {
-      label: "Hours this week",
+      label: "Tracked Time",
       value: loadingDashboard ? "—" : `${Math.round(weekHours * 10) / 10}h`,
-      hint: "tracked in ClickUp",
+      hint: "local · this week",
       title: undefined
     },
     {
-      label: "Next up",
+      label: "Calendar",
       value: loadingCalendar || now === null ? "—" : nextEvent ? formatEventTime(nextEvent) : "Clear",
       hint: nextEvent ? nextEvent.title : "nothing scheduled",
       title: nextEvent?.title
@@ -752,30 +819,42 @@ export function OwnerDashboard({ version }: { version: string }) {
   const widgets: Record<WidgetId, React.ReactNode> = {
     projects: (
       <Card
-        title="Eisenhower Matrix"
-        eyebrow="Add / prioritization"
-        dragLabel="Eisenhower Matrix" {...collapseProps("projects")}
-        action={<span className={styles.badge}>{dashboardData?.source === "live" ? "Live ClickUp" : "Sample"}</span>}
+        title="Project Priorities"
+        dragLabel="Project Priorities" {...collapseProps("projects")}
+        action={
+          <a href="/projects" className={styles.inlineLinkText}>
+            Manage
+          </a>
+        }
       >
-        {loadingDashboard ? (
-          <div className={styles.loader}><LoaderCircle size={16} /> Loading matrix</div>
-        ) : dashboardError ? (
-          <div className={styles.error}>{dashboardError}</div>
+        {loadingEntities ? (
+          <div className={styles.loader}><LoaderCircle size={16} /> Loading projects</div>
+        ) : entitiesError ? (
+          <div className={styles.error}>{entitiesError}</div>
+        ) : activeProjects.length === 0 ? (
+          <div className={styles.empty}>No active projects yet. Add one on the Projects page.</div>
         ) : (
           <div className={styles.priorityGrid}>
-            {dashboardData?.priorities.map((bucket) => (
+            {projectPriorityBuckets.map((bucket) => (
               <div key={bucket.key} className={styles.priorityCell}>
                 <div className={styles.priorityHead}>
-                  <span className={styles.priorityKey}>{bucket.key}</span>
-                  <span className={styles.tinyUpper}>{bucket.label}</span>
+                  <span className={styles.priorityKey}>{bucket.title}</span>
+                  <span className={styles.tinyUpper}>{bucket.projects.length}</span>
                 </div>
+                <p className={styles.helpText}>{bucket.note}</p>
                 <div className={styles.stack}>
-                  {bucket.projects.map((project) => (
-                    <div key={project.id} className={styles.chip}>
-                      <div className={styles.chipTitle}>{project.title}</div>
-                      {project.subtitle ? <div className={styles.chipMeta}>{project.subtitle}</div> : null}
-                    </div>
-                  ))}
+                  {bucket.projects.length === 0 ? (
+                    <div className={styles.empty}>None</div>
+                  ) : (
+                    bucket.projects.slice(0, 4).map((project) => (
+                      <div key={project.id} className={styles.chip}>
+                        <div className={styles.chipTitle}>{project.name}</div>
+                        <div className={styles.chipMeta}>
+                          {project.clientId ? clientNameById.get(project.clientId) ?? "Unknown client" : "Unassigned"}
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             ))}
@@ -785,8 +864,7 @@ export function OwnerDashboard({ version }: { version: string }) {
     ),
     activeProjects: (
       <CollectionCard
-        title="Projects"
-        eyebrow="Execute / active work"
+        title="Active Projects"
         dragLabel="Projects"
         loadingLabel="Loading projects"
         emptyLabel="No active projects yet — add one on the Projects page."
@@ -800,7 +878,6 @@ export function OwnerDashboard({ version }: { version: string }) {
     clients: (
       <CollectionCard
         title="Clients"
-        eyebrow="CRM / owned locally"
         dragLabel="Clients"
         loadingLabel="Loading clients"
         emptyLabel="No clients yet — add one on the Clients page."
@@ -812,11 +889,12 @@ export function OwnerDashboard({ version }: { version: string }) {
       />
     ),
     mrr: (
-      <Card title="MRR" eyebrow="Multiply / scoreboard" dragLabel="MRR" {...collapseProps("mrr")}>
-        <p className={styles.metric}>{formatMoney(manual.mrr.current)}</p>
+      <Card title="Revenue" dragLabel="Revenue" {...collapseProps("mrr")}>
+        <p className={styles.metric}>{loadingEntities ? "—" : formatMoneyNumber(clientMrr)}</p>
+        <p className={styles.helpText}>Sum of active clients whose payment type is MRR.</p>
         <div className={styles.inputs2}>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Current MRR</span>
+            <span className={styles.fieldLabel}>Current forecast</span>
             <input
               className={styles.input}
               value={manual.mrr.current}
@@ -829,7 +907,7 @@ export function OwnerDashboard({ version }: { version: string }) {
             />
           </label>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>Projected EOM</span>
+            <span className={styles.fieldLabel}>Projected month end</span>
             <input
               className={styles.input}
               value={manual.mrr.projected}
@@ -844,13 +922,12 @@ export function OwnerDashboard({ version }: { version: string }) {
         </div>
         <div className={styles.highlight}>
           <div className={styles.rowBetween}>
-            <span className={styles.tinyUpper}>PCT MRR</span>
-            <TrendingUp size={16} />
+            <span className={styles.tinyUpper}>Month over month</span>
+            <span className={styles.helpText}>{formatMoney(manual.mrr.projected)} projected</span>
           </div>
           <div className={styles.highlightMetric}>{manual.mrr.momDelta}%</div>
-          <p className={styles.helpText}>Using month-over-month delta for v1, with projection shown above.</p>
           <label className={styles.fieldCompact}>
-            <span className={styles.fieldLabel}>MoM %</span>
+            <span className={styles.fieldLabel}>Change percent</span>
             <input
               className={styles.input}
               value={manual.mrr.momDelta}
@@ -867,8 +944,7 @@ export function OwnerDashboard({ version }: { version: string }) {
     ),
     hours: (
       <Card
-        title="Hours by Project"
-        eyebrow="Multiply / where time went"
+        title="Time by Project"
         dragLabel="Hours by Project" {...collapseProps("hours")}
         action={
           <div className={styles.hoursToggle}>
@@ -894,7 +970,7 @@ export function OwnerDashboard({ version }: { version: string }) {
         ) : dashboardError ? (
           <div className={styles.error}>{dashboardError}</div>
         ) : hoursEntries.length === 0 ? (
-          <div className={styles.empty}>No tracked ClickUp hours in this window yet.</div>
+          <div className={styles.empty}>No local time entries in this window yet.</div>
         ) : (
           <div className={styles.stack}>
             {hoursEntries.map((entry) => (
@@ -908,9 +984,7 @@ export function OwnerDashboard({ version }: { version: string }) {
                 </div>
               </div>
             ))}
-            <p className={styles.helpText}>
-              {dashboardData?.source === "live" ? "Live ClickUp time entries grouped by list." : "Sample hour distribution."}
-            </p>
+            <p className={styles.helpText}>Local time entries grouped by project.</p>
           </div>
         )}
       </Card>
@@ -918,7 +992,6 @@ export function OwnerDashboard({ version }: { version: string }) {
     calendar: (
       <Card
         title="Calendar"
-        eyebrow={calendarExpanded ? "Divide / expanded schedule view" : "Divide / today + next 2 days"}
         dragLabel="Calendar" {...collapseProps("calendar")}
         className={calendarExpanded ? styles.calendarExpandedCard : undefined}
         bodyClassName={calendarExpanded ? styles.calendarExpandedBody : undefined}
@@ -980,7 +1053,7 @@ export function OwnerDashboard({ version }: { version: string }) {
       </Card>
     ),
     goals: (
-      <Card title="Steps to Clear the Bottleneck" eyebrow="Add / execution path" dragLabel="Goals" {...collapseProps("goals")}>
+      <Card title="Next Steps" dragLabel="Goals" {...collapseProps("goals")}>
         <div className={styles.stack}>
           {manual.goals.map((goal, index) => (
             <label key={`goal-${index}`} className={styles.goalRow}>
@@ -1003,10 +1076,9 @@ export function OwnerDashboard({ version }: { version: string }) {
     ),
     upNext: (
       <Card
-        title="Up Next"
-        eyebrow="Add / next clearers"
-        dragLabel="Up Next" {...collapseProps("upNext")}
-        action={<span className={styles.badge}>{dashboardData?.source === "live" ? "Live ClickUp" : "Local only"}</span>}
+        title="ClickUp Tasks"
+        dragLabel="ClickUp Tasks" {...collapseProps("upNext")}
+        action={<span className={styles.badge} title={clickUpSyncLabel}>{clickUpSyncLabel}</span>}
       >
         {loadingDashboard ? (
           <div className={styles.loader}><LoaderCircle size={16} /> Loading tasks</div>
@@ -1014,6 +1086,14 @@ export function OwnerDashboard({ version }: { version: string }) {
           <div className={styles.error}>{dashboardError}</div>
         ) : (
           <div className={styles.stack}>
+            {clickUpSync?.error ? (
+              <div className={styles.error} title={clickUpSync.error}>
+                ClickUp refresh failed.
+                {clickUpSync.lastSyncedAt
+                  ? ` Showing cached tasks from ${formatIsoClock(clickUpSync.lastSyncedAt)}.`
+                  : " No cached task sync is available yet."}
+              </div>
+            ) : null}
             {dashboardData?.upNext.map((task) => (
               <label key={task.id} className={styles.taskRow}>
                 <input
@@ -1024,7 +1104,7 @@ export function OwnerDashboard({ version }: { version: string }) {
                     void toggleTaskDone(task)
                   }
                 />
-                <div>
+                <div className={styles.taskContent}>
                   <div className={styles.rowBetween}>
                     <p className={`${styles.taskTitle} ${task.done ? styles.taskDone : ""}`}>{task.title}</p>
                     <PriorityBadge priority={task.priority} />
@@ -1046,7 +1126,7 @@ export function OwnerDashboard({ version }: { version: string }) {
       </Card>
     ),
     phoneCalls: (
-      <Card title="Phone Calls" eyebrow="Divide / communication block" dragLabel="Phone Calls" {...collapseProps("phoneCalls")}>
+      <Card title="Phone Calls" dragLabel="Phone Calls" {...collapseProps("phoneCalls")}>
         <div className={styles.callsGrid}>
           {(["toMake", "made"] as const).map((column) => (
             <div key={column} className={styles.callColumn}>
@@ -1131,11 +1211,10 @@ export function OwnerDashboard({ version }: { version: string }) {
       </Card>
     ),
     whatsImportant: (
-      <Card title="What's Important" eyebrow="Execution / remove resistance" dragLabel="What's Important" {...collapseProps("whatsImportant")}>
+      <Card title="Daily Note" dragLabel="Daily Note" {...collapseProps("whatsImportant")}>
         <div className={styles.focusPanel}>
           <div className={styles.rowBetween}>
-            <strong>Self-talk / focus today</strong>
-            <Target size={16} />
+            <strong>What matters today</strong>
           </div>
           <textarea
             className={styles.focusText}
@@ -1151,19 +1230,16 @@ export function OwnerDashboard({ version }: { version: string }) {
       </Card>
     ),
     openSlot: (
-      <Card title="Daily System Snapshot" eyebrow="4-step summary" dragLabel="Open Slot" {...collapseProps("openSlot")}>
+      <Card title="Today's Snapshot" dragLabel="Today's Snapshot" {...collapseProps("openSlot")}>
         <div className={styles.stack}>
           <div className={styles.openIdea}>
-            <span>Lens: {manual.hyperfocus.lens}</span>
-            <ArrowUpRight size={15} />
+            <span>Focus: {manual.hyperfocus.lens}</span>
           </div>
           <div className={styles.openIdea}>
-            <span>Bottleneck: {manual.hyperfocus.bottleneck}</span>
-            <ArrowUpRight size={15} />
+            <span>Blocker: {manual.hyperfocus.bottleneck}</span>
           </div>
           <div className={styles.openIdea}>
             <span>Streak: {streakLabel}</span>
-            <ArrowUpRight size={15} />
           </div>
           <p className={styles.helpText}>{manual.hyperfocus.multiply.dailyWin}</p>
         </div>
@@ -1424,8 +1500,7 @@ export function OwnerDashboard({ version }: { version: string }) {
         </div>
 
         <Card
-          title="Daily Hyperfocus System"
-          eyebrow="Apply the 4 steps every day"
+          title="Daily State"
           className={styles.systemCard}
           {...collapseProps(HYPERFOCUS_PANEL_ID)}
         >
@@ -1434,42 +1509,8 @@ export function OwnerDashboard({ version }: { version: string }) {
               <div className={styles.systemStepHeader}>
                 <span className={styles.systemNumber}>1</span>
                 <div>
-                  <strong>Subtract</strong>
-                  <p className={styles.helpText}>Remove friction before adding effort.</p>
-                </div>
-              </div>
-              <div className={styles.stack}>
-                {manual.hyperfocus.subtract.map((item, index) => (
-                  <label key={`subtract-${index}`} className={styles.systemItem}>
-                    <span className={styles.systemBullet}>-</span>
-                    <input
-                      className={styles.goalInput}
-                      value={item}
-                      onChange={(event) =>
-                        setManual((current) => {
-                          const subtract = [...current.hyperfocus.subtract] as ManualState["hyperfocus"]["subtract"];
-                          subtract[index] = event.target.value;
-                          return {
-                            ...current,
-                            hyperfocus: {
-                              ...current.hyperfocus,
-                              subtract
-                            }
-                          };
-                        })
-                      }
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className={styles.systemStep}>
-              <div className={styles.systemStepHeader}>
-                <span className={styles.systemNumber}>2</span>
-                <div>
-                  <strong>Add</strong>
-                  <p className={styles.helpText}>Clarity first, then bottleneck logic.</p>
+                  <strong>Focus</strong>
+                  <p className={styles.helpText}>The current lens, target, reason, and blocker.</p>
                 </div>
               </div>
               <div className={styles.stack}>
@@ -1513,7 +1554,7 @@ export function OwnerDashboard({ version }: { version: string }) {
                   />
                 </label>
                 <label className={styles.fieldCompact}>
-                  <span className={styles.fieldLabel}>Bottleneck</span>
+                  <span className={styles.fieldLabel}>Blocker</span>
                   <input
                     className={styles.input}
                     value={manual.hyperfocus.bottleneck}
@@ -1530,10 +1571,44 @@ export function OwnerDashboard({ version }: { version: string }) {
 
             <div className={styles.systemStep}>
               <div className={styles.systemStepHeader}>
+                <span className={styles.systemNumber}>2</span>
+                <div>
+                  <strong>Remove</strong>
+                  <p className={styles.helpText}>Friction to clear before the work starts.</p>
+                </div>
+              </div>
+              <div className={styles.stack}>
+                {manual.hyperfocus.subtract.map((item, index) => (
+                  <label key={`subtract-${index}`} className={styles.systemItem}>
+                    <span className={styles.systemBullet}>-</span>
+                    <input
+                      className={styles.goalInput}
+                      value={item}
+                      onChange={(event) =>
+                        setManual((current) => {
+                          const subtract = [...current.hyperfocus.subtract] as ManualState["hyperfocus"]["subtract"];
+                          subtract[index] = event.target.value;
+                          return {
+                            ...current,
+                            hyperfocus: {
+                              ...current.hyperfocus,
+                              subtract
+                            }
+                          };
+                        })
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className={styles.systemStep}>
+              <div className={styles.systemStepHeader}>
                 <span className={styles.systemNumber}>3</span>
                 <div>
-                  <strong>Divide</strong>
-                  <p className={styles.helpText}>Give each type of work its own slot.</p>
+                  <strong>Work Blocks</strong>
+                  <p className={styles.helpText}>Named blocks for the day.</p>
                 </div>
               </div>
               <div className={styles.stack}>
@@ -1565,8 +1640,8 @@ export function OwnerDashboard({ version }: { version: string }) {
               <div className={styles.systemStepHeader}>
                 <span className={styles.systemNumber}>4</span>
                 <div>
-                  <strong>Multiply</strong>
-                  <p className={styles.helpText}>Consistency turns the process into habit.</p>
+                  <strong>Daily History</strong>
+                  <p className={styles.helpText}>The saved win and current streak.</p>
                 </div>
               </div>
               <div className={styles.stack}>
@@ -1579,12 +1654,12 @@ export function OwnerDashboard({ version }: { version: string }) {
                   <span className={styles.fieldLabel}>Streak</span>
                   <p className={styles.highlightMetric}>{streakLabel}</p>
                   <p className={styles.helpText}>
-                    Consecutive days with a daily win recorded. Counted from saved history — today
+                    Consecutive days with a daily win recorded. Counted from saved history; today
                     still counts once you fill the win in below.
                   </p>
                 </div>
                 <label className={styles.fieldCompact}>
-                  <span className={styles.fieldLabel}>Daily win to repeat</span>
+                  <span className={styles.fieldLabel}>Daily win</span>
                   <input
                     className={styles.input}
                     value={manual.hyperfocus.multiply.dailyWin}
@@ -1602,10 +1677,6 @@ export function OwnerDashboard({ version }: { version: string }) {
                     }
                   />
                 </label>
-                <div className={styles.loopNote}>
-                  <span className={styles.fieldLabel}>Diagnostic loop</span>
-                  <p className={styles.helpText}>Lens {"->"} Goal {"->"} Bottleneck {"->"} Steps to clear it</p>
-                </div>
               </div>
             </div>
           </div>
@@ -1665,7 +1736,7 @@ export function OwnerDashboard({ version }: { version: string }) {
           >
             <div className={styles.modalHeader}>
               <div>
-                <p className={styles.cardEyebrow}>Calendar event</p>
+                <p className={styles.modalLabel}>Event</p>
                 <h3 className={styles.modalTitle}>{selectedCalendarEvent.title}</h3>
               </div>
               <button

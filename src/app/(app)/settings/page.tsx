@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { allowUnprotected, isAuthConfigured } from "@/lib/auth";
 import { getAppVersion } from "@/lib/app-version";
+import { getClickUpCredentialStatus } from "@/lib/clickup";
 import styles from "../entities.module.css";
+import { ClickUpSettingsCard } from "./clickup-settings-card";
 
 // Protection state is runtime environment, never build-time.
 export const dynamic = "force-dynamic";
@@ -12,9 +14,10 @@ export const dynamic = "force-dynamic";
  * or the documented runbooks, and a settings form that silently rewrites env
  * would be a lie about where configuration actually lives.
  */
-export default function SettingsPage() {
+export default async function SettingsPage() {
   const authConfigured = isAuthConfigured();
   const runningOpen = !authConfigured && allowUnprotected();
+  const clickUpStatus = await getClickUpCredentialStatus();
 
   return (
     <main className={styles.page}>
@@ -51,6 +54,8 @@ export default function SettingsPage() {
             </p>
           ) : null}
         </section>
+
+        <ClickUpSettingsCard initialStatus={clickUpStatus} />
 
         <section className={styles.card}>
           <div className={styles.rowTitle}>Data</div>

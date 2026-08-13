@@ -8,9 +8,10 @@ The dashboard is mid-way through absorbing Recoup's and Mission Control's
 client / project / time / expense / mileage model and becoming the single
 system of record. The full scope — decisions, target schema, phase status —
 lives at [`docs/dashboard-consolidation-scope.html`](docs/dashboard-consolidation-scope.html)
-(open it in a browser). Phases 0–2 are done: migration runner, locked-capable
-auth, backups, and Clients + Projects as owned entities with the
-mission-control data imported. Next: time entry, then expenses and mileage.
+(open it in a browser). Phases 0–3 are done: Time is an owned entity with
+frozen-rate CRUD, recent-entry defaults, local dashboard rollups, and an
+idempotent mission-control import. The verified live source imported all 98
+rows on 2026-08-13; next comes expenses and mileage.
 
 ## What It Is
 
@@ -24,8 +25,8 @@ mission-control data imported. Next: time entry, then expenses and mileage.
 
 The app has 3 data layers:
 
-1. `Live external data`
-- ClickUp powers `Eisenhower Matrix`, `Up Next`, and `Hours by Project`
+1. `Connected upstream data`
+- ClickUp assigned tasks sync into SQLite and power `ClickUp Tasks`
 - Google Calendar powers the `Calendar` widget
 
 2. `Local persistent dashboard state` — the system of record
@@ -37,41 +38,60 @@ The app has 3 data layers:
     fields, and archive instead of delete. The dashboard widgets are a glance
     at them; the pages are the management surface. Imported once from
     mission-control (see below); no longer read from ClickUp lists
-  - `MRR`
-  - `Hyperfocus` / 4-step system fields
-  - `Goals`
+  - **`Time` — an owned entity as of consolidation phase 3**, with full CRUD
+    at `/time`, hours-first entry, billable/non-billable status, a rate frozen
+    at save, recent client/project prefill, and nullable legacy start/end times
+  - `Time by Project`, now rolled up from local time entries rather than
+    ClickUp time tracking
+  - `clickup_tasks` and `clickup_sync_state`, a local cache of assigned ClickUp
+    tasks plus the last sync attempt/result
+  - `Revenue`, with client MRR derived from active client rows and manual
+    forecast fields kept in dashboard state
+  - `Daily State`
+  - `Next Steps`
   - `Phone Calls`
-  - `What's Important`
+  - `Daily Note`
   - widget layout/order and which panels are collapsed
 - Every save also writes a dated row to `daily_history`, which is what the
   `Streak` is counted from
 
-Ticking an `Up Next` checkbox writes the task's status back to ClickUp, so the
-change lives in ClickUp rather than in the page.
+Ticking a `ClickUp Tasks` checkbox writes the task's status back to ClickUp and
+removes the task from the local cache after a successful close. ClickUp remains
+the source of truth for task status.
 
 3. `UI/runtime layer`
 - Persistent sidebar menu (mission-control-style layout: Operate / Track /
   System / External sections) around every screen except `/login`; drawer +
-  top bar under 860px. Screens for phases 3–5 (`/time`, `/expenses`,
-  `/mileage`, `/calendar`) are present as honest placeholders marked "soon";
-  `/settings` shows protection state, data locations, and links the
-  consolidation scope at `/scope`
+  top bar under 860px. `/time` is live; screens for phases 4–5 (`/expenses`,
+  `/mileage`, `/calendar`) remain honest placeholders marked "soon";
+  `/settings` manages the ClickUp API key, shows protection state and data
+  locations, and links the consolidation scope at `/scope`
 - Drag-and-drop widget ordering
-- Collapsible panels (including the Daily Hyperfocus System), persisted server-side
+- Collapsible panels, persisted server-side
 - responsive top-aligned grid
 - event detail modal for calendar items
 - installable PWA shell with manifest, icons, and service worker
 
 ## Current Dashboard Model
 
-The page is structured around the 4-step daily operating system:
+The home dashboard is structured around the data the app owns and the connected
+feeds it reads:
 
-- `Subtract`: remove distractions and friction
-- `Add`: set lens, target, why, and bottleneck
-- `Divide`: split work into morning / midday / afternoon lanes
-- `Multiply`: repeat the daily win, with the streak counted from saved history
+- `clients`: client list, active/prospect counts, payment type, rates, and
+  client-derived MRR
+- `projects`: active project list and priority quadrants from `urgent` and
+  `important`
+- `dashboard_state`: daily focus, blockers, next steps, revenue forecast,
+  phone calls, daily note, layout, and collapsed panels
+- `daily_history`: saved daily wins and the streak derived from those rows
+- `time_entries`: owned hours, frozen billing-rate snapshots, billable status,
+  and optional legacy start/end times
+- `clickup_tasks`: cached assigned ClickUp tasks; refreshed when the cache is
+  missing or more than one hour old
+- External feeds: ClickUp assigned tasks and calendar events
 
-This sits above the operational widgets so the dashboard is not just a reporting screen; it is meant to drive the day.
+The visible copy avoids framework descriptors and names the table or feed that
+owns the data whenever that helps explain the screen.
 
 ## Access Control
 
@@ -149,13 +169,25 @@ without credentials means the explicit opt-out is active.
   `status` (`active | on_hold | completed`), and the `urgent`/`important`
   Eisenhower axes for phase 6
 
+### `GET /api/time-entries` · `POST /api/time-entries` · `GET|PUT|DELETE /api/time-entries/{id}`
+- Lists (optional `from`, `to`, and capped `limit` query parameters), creates,
+  reads, updates, and deletes time entries
+- A project inherits its client when one is not supplied; mismatched
+  client/project ownership is rejected
+- Native saves resolve `project.hourlyRateOverride → client.hourlyRate → 0`
+  and freeze that number on the row. Editing hours/details keeps the snapshot;
+  changing the client/project resolves a new one
+- List responses include `recentDefaults`, used by `/time` to prefill the
+  last-used client, project, and billable choice
+
 ### `POST /api/admin/import-mission-control`
 - Body: `{ "sourcePath": "/path/to/AMB-mission-control.db" }` — a file already
   on the server
-- Imports clients and projects with the cleaning rules from the scope doc
+- Imports clients, projects, and time entries with the cleaning rules from the scope doc
   (status normalization, 0-means-unset money fields, soft-deleted projects
-  skipped, dangling client links imported unassigned), each fix-up reported in
-  `warnings`
+  skipped, dangling links imported unassigned, invalid time durations skipped,
+  and the known `10:30` date repaired from its `created_at` day), each fix-up
+  reported in `warnings`
 - **Idempotent**: every imported row keeps its mission-control id in `mcId`,
   and re-running upserts by it — a fresher MC copy converges instead of
   duplicating
@@ -165,17 +197,27 @@ without credentials means the explicit opt-out is active.
 
 ### `GET /api/dashboard`
 - If `OWNER_DASHBOARD_DATA_URL` is set, proxies that upstream endpoint
-- Otherwise fetches live ClickUp data directly (API key read from `~/.openclaw/secrets.json` → `env.CLICKUP_API_KEY`)
-- ClickUp sources: `Eisenhower Matrix` and `Up Next` (team-wide assigned tasks)
-  plus time entries for `Hours by Project`. The old Projects/Clients list
-  fetches — and their hardcoded list ids — are gone as of phase 2
-- Falls back to sample data only if live fetch fails, and always reports why: the failure is logged server-side and returned as `fallbackReason`, which the UI shows as a "these numbers are not real" banner
+- Otherwise reads `ClickUp Tasks` from the local `clickup_tasks` cache. If the
+  last successful sync is missing or more than one hour old, it attempts a
+  fresh ClickUp fetch first and stores the result in SQLite. The ClickUp API key
+  is read from the Settings screen first, then `CLICKUP_API_KEY`, then the
+  legacy `~/.openclaw/secrets.json` file
+- If a refresh fails but a previous cache exists, the dashboard serves the
+  cached tasks and shows the sync error with the last successful sync time. If
+  there is no cached ClickUp data yet, it falls back to sample task data and
+  reports why
+- `Time by Project` always comes from local `time_entries`, including when task
+  data is proxied or falls back. The old Projects/Clients/time ClickUp fetches
+  are gone as of phases 2–3
 - Proxied and live payloads are both normalized, so a drifting upstream cannot crash the page
-- `Up Next` is currently ranked against the saved `lens`, `target`, and `bottleneck`, with due date and priority still influencing ranking
+- `ClickUp Tasks` is currently ranked against the saved `lens`, `target`, and
+  `bottleneck`, with due date and priority still influencing ranking
 
 ### `PATCH /api/tasks/{taskId}`
 - Body: `{ "done": boolean, "listId": string }`
-- Writes an `Up Next` checkbox back to ClickUp as a task status change
+- Writes a `ClickUp Tasks` checkbox back to ClickUp as a task status change
+- On a successful done write, deletes the task from `clickup_tasks` so the local
+  dashboard reflects the closed task before the next scheduled sync
 - Status names are per-list, so the list's own statuses are read first and a
   status of type `closed`/`done` (or `open` when unchecking) is chosen. If the
   list has none, the request fails with 422 and the task is left untouched
@@ -206,8 +248,12 @@ Currently stores:
 - phone calls
 - widget layout/order and collapsed panels
 - one dated snapshot per day, in `daily_history`
+- clients, projects, and time entries
+- cached ClickUp assigned tasks and sync metadata
+- `app_settings`, including the Settings-managed ClickUp API key
 
-It does **not** store ClickUp tasks or Google Calendar events as source-of-truth data right now.
+ClickUp tasks are stored as a refreshable cache, not as source-of-truth data.
+Google Calendar events are not stored in SQLite right now.
 
 ### Daily history
 
@@ -221,11 +267,11 @@ and earlier days are never touched again. A row keeps the daily win, lens,
 target, bottleneck, MRR figures, goals, what's important, and the phone-call
 counts.
 
-The `Streak` on the Multiply step is derived from those rows: consecutive days
-with a **non-empty daily win**, counting back from today. A blank day breaks it.
-Today being blank does not — counting starts at yesterday in that case, so the
-streak does not read as broken every morning before the win is filled in. Typing
-a win updates the number immediately rather than waiting out the save debounce.
+The `Streak` in Daily State is derived from those rows: consecutive days with a
+**non-empty daily win**, counting back from today. A blank day breaks it. Today
+being blank does not — counting starts at yesterday in that case, so the streak
+does not read as broken every morning before the win is filled in. Typing a win
+updates the number immediately rather than waiting out the save debounce.
 
 Upgrading an existing database needs no manual step: opening it runs any
 pending migrations, and history simply starts from the first save after the
@@ -239,6 +285,9 @@ from mission-control (`src/lib/entity-seed.ts`, generated from the verified
 existing row, seeded or hand-made, disables it forever, so nothing the owner
 edits is ever overwritten. Rows keep `mc_id`, so running the real
 mission-control import later converges onto them rather than duplicating.
+Time rows are not committed as seed data. This checkout's local database was
+loaded with all 98 rows on 2026-08-13; a separately deployed database must run
+the same import against the verified mission-control file.
 This is deliberate: deploys need zero setup and no database hand-off. Delete
 the file and its call in `dashboard-state.ts` once seeding has outlived its
 usefulness.
@@ -414,15 +463,18 @@ ClickUp source ids when it stops being one.
 - `src/app/api/tasks/[taskId]/route.ts`
 - `src/lib/calendar-days.ts`
 - `src/lib/clickup.ts`
+- `src/lib/clickup-task-cache.ts`
 - `src/lib/dashboard-data.ts`
 - `src/lib/dashboard-layout.ts`
 - `src/components/app-shell.tsx`
 - `src/app/(app)/layout.tsx`
 - `src/app/(app)/clients/page.tsx`
 - `src/app/(app)/projects/page.tsx`
+- `src/app/(app)/time/page.tsx`
 - `src/app/(app)/settings/page.tsx`
 - `src/app/api/clients/route.ts`
 - `src/app/api/projects/route.ts`
+- `src/app/api/time-entries/route.ts`
 - `src/app/api/admin/import-mission-control/route.ts`
 - `src/lib/backup.ts`
 - `src/lib/dashboard-state.ts`
@@ -433,28 +485,26 @@ ClickUp source ids when it stops being one.
 - `src/lib/mission-control-import.ts`
 - `src/lib/sample-data.ts`
 - `src/lib/schema.ts`
+- `src/lib/time-entries.ts`
 - `src/lib/types.ts`
 
 ## What Still Needs Improvement
 
 Known and deliberate, roughly in the order they are worth fixing:
 
-- **The live integrations only run on one machine.** The ClickUp key is read
-  from `~/.openclaw/secrets.json` and the calendar shells out to
-  `~/.local/bin/gog`. Reading `CLICKUP_API_KEY` from env (falling back to the
-  secrets file) is the smallest remaining change — the database side is solved
-  (`OWNER_DASHBOARD_DB_PATH`, daily backups, migration runner).
-- **`Up Next` ranking is heuristic, and its lens weighting does not work.** In
+- **Calendar still only runs on one machine.** ClickUp credentials now live in
+  Settings, with env/OpenClaw as fallback. Calendar still shells out to
+  `~/.local/bin/gog`, so it remains tied to the machine where that account is
+  configured.
+- **`ClickUp Tasks` ranking is heuristic, and its lens weighting does not work.** In
   `scoreTaskAgainstBottleneck`, lens matches are meant to score 2 against 4 for
   everything else, but a single token is compared against the whole `lens`
   field, so any multi-word lens never matches and every hit scores 4. Left
   alone on purpose: worth one considered pass over the whole ranking rather than
   a drive-by fix. Marked `FIXME` in `src/app/api/dashboard/route.ts`.
-- **ClickUp source IDs are hardcoded.** The projects and clients list IDs are
-  now named outright in `src/app/api/dashboard/route.ts` rather than read from
-  undocumented env vars; the team and assignee IDs still read env with hardcoded
-  fallbacks. All four should be env-only, and in `.env.example`, when this stops
-  being single-tenant. Marked `FIXME`.
+- **ClickUp source IDs are hardcoded.** The team and assignee IDs still read env
+  with hardcoded fallbacks. They should be env-only, and in `.env.example`,
+  when this stops being single-tenant.
 - The header's "Tasks" and "Hermes" buttons link to hardcoded Tailscale
   addresses (`http://100.119.59.63:3333/tasks` and
   `http://100.82.222.18:9119/chat`), which are dead links from anywhere off the

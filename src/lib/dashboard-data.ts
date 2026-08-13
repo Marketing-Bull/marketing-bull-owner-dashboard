@@ -7,7 +7,14 @@
  * down -- including the manual widgets that never touch this data.
  */
 
-import type { ClickUpProject, DashboardData, HoursEntry, PriorityBucket, UpNextTask } from "@/lib/types";
+import type {
+  ClickUpProject,
+  ClickUpSyncInfo,
+  DashboardData,
+  HoursEntry,
+  PriorityBucket,
+  UpNextTask
+} from "@/lib/types";
 
 const PRIORITY_KEYS = ["P0", "P1", "P2", "P3"] as const;
 
@@ -95,6 +102,18 @@ function normalizeUpNext(value: unknown): UpNextTask[] {
   });
 }
 
+function normalizeClickUpSync(value: unknown): ClickUpSyncInfo | undefined {
+  const item = asRecord(value);
+  if (Object.keys(item).length === 0) return undefined;
+  return {
+    lastSyncedAt: typeof item.lastSyncedAt === "string" ? item.lastSyncedAt : null,
+    lastAttemptedAt: typeof item.lastAttemptedAt === "string" ? item.lastAttemptedAt : null,
+    stale: Boolean(item.stale),
+    refreshed: Boolean(item.refreshed),
+    error: asOptionalString(item.error)
+  };
+}
+
 export function normalizeDashboardData(value: unknown): DashboardData {
   const root = asRecord(value);
   const hours = asRecord(root.hours);
@@ -109,6 +128,7 @@ export function normalizeDashboardData(value: unknown): DashboardData {
     upNext: normalizeUpNext(root.upNext),
     source: root.source === "live" ? "live" : "sample",
     generatedAt: Number.isFinite(generatedAt) ? generatedAt : undefined,
+    clickUpSync: normalizeClickUpSync(root.clickUpSync),
     fallbackReason: asOptionalString(root.fallbackReason)
   };
 }
