@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient, createProject } from "@/lib/entities";
 import {
   createMileageEntry,
@@ -19,13 +19,15 @@ import {
 } from "@/lib/mileage";
 import { runMigrations } from "@/lib/migrations";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
+import { setStoredMapsApiKey } from "@/lib/app-settings";
+import { autocompleteAddress, calculateDrivingRoutes } from "@/lib/maps";
 
 let open: DatabaseSync[] = [];
 function freshDb(): DatabaseSync {
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "owner-dash-mileage-")), "dash.sqlite"));
   runMigrations(db, DASHBOARD_MIGRATIONS); open.push(db); return db;
 }
-afterEach(() => { for (const db of open) try { db.close(); } catch {} open = []; });
+afterEach(() => { vi.unstubAllGlobals(); for (const db of open) try { db.close(); } catch {} open = []; });
 
 describe("mileage", () => {
   it("computes and stores round trips instead of trusting a supplied total", () => {
@@ -34,6 +36,31 @@ describe("mileage", () => {
     const entry = createMileageEntry(db, { date: "2026-08-13", miles: 11, roundTrip: true, startAddress: "A", endAddress: "B" });
     expect(entry.totalMiles).toBe(22);
     expect(updateMileageEntry(db, entry.id, { roundTrip: false }).totalMiles).toBe(11);
+  });
+
+  it("stores provider route provenance while preserving manual entries", () => {
+    const db = freshDb();
+    const manual = createMileageEntry(db, { date: "2026-08-13", miles: 4 });
+    expect(manual.calculationSource).toBe("manual");
+    const provider = createMileageEntry(db, { date: "2026-08-13", miles: 8.25, calculationSource: "provider", calculationProvider: "openrouteservice", calculatedMiles: 8.25, calculatedAt: "2026-08-13T12:00:00.000Z", startPlaceId: "start", endPlaceId: "end", routeMetadataJson: "{\"routeIndex\":0}" });
+    expect(provider).toMatchObject({ calculationSource: "provider", calculationProvider: "openrouteservice", calculatedMiles: 8.25, startPlaceId: "start", endPlaceId: "end" });
+    expect(updateMileageEntry(db, provider.id, { miles: 9, calculationSource: "manual" })).toMatchObject({ calculationSource: "manual", calculationProvider: null, calculatedMiles: null });
+  });
+
+  it("autocompletes, calculates, and caches provider routes", async () => {
+    const db = freshDb(); setStoredMapsApiKey(db, "test-key");
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
+      calls += 1; const value = String(url);
+      if (value.includes("geocode")) return new Response(JSON.stringify({ features: [{ id: value.includes("Start") ? "start" : "end", geometry: { coordinates: value.includes("Start") ? [-80.1, 25.7] : [-80.2, 25.8] }, properties: { label: value.includes("Start") ? "Start Place" : "End Place" } }] }), { status: 200 });
+      return new Response(JSON.stringify({ routes: [{ summary: { distance: 16093.44, duration: 1200 } }] }), { status: 200 });
+    }));
+    expect((await autocompleteAddress(db, "Start"))[0]?.label).toBe("Start Place");
+    const first = await calculateDrivingRoutes(db, "Start", "End");
+    expect(first.routes[0]).toMatchObject({ miles: 10, durationMinutes: 20 });
+    const beforeCache = calls;
+    const second = await calculateDrivingRoutes(db, "Start", "End");
+    expect(second.cached).toBe(true); expect(calls).toBe(beforeCache + 2);
   });
 
   it("inherits project ownership and rejects impossible distances and mismatches", () => {

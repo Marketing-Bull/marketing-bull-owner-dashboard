@@ -344,5 +344,30 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
     up: (db) => {
       db.exec("ALTER TABLE dashboard_state ADD COLUMN hidden_widgets_json TEXT NOT NULL DEFAULT '[]'");
     }
+  },
+  {
+    // Provider-neutral Mileage route provenance. Existing rows remain manual;
+    // the cache stores successful calculations only and never exposes secrets.
+    id: "009-mileage-maps",
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE mileage_entries ADD COLUMN calculation_source TEXT NOT NULL DEFAULT 'manual' CHECK (calculation_source IN ('manual', 'provider'));
+        ALTER TABLE mileage_entries ADD COLUMN calculation_provider TEXT;
+        ALTER TABLE mileage_entries ADD COLUMN calculated_miles REAL;
+        ALTER TABLE mileage_entries ADD COLUMN route_metadata_json TEXT;
+        ALTER TABLE mileage_entries ADD COLUMN calculated_at TEXT;
+        ALTER TABLE mileage_entries ADD COLUMN start_place_id TEXT;
+        ALTER TABLE mileage_entries ADD COLUMN end_place_id TEXT;
+
+        CREATE TABLE mileage_route_cache (
+          cache_key TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          response_json TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_mileage_route_cache_expires_at ON mileage_route_cache(expires_at);
+      `);
+    }
   }
 ];

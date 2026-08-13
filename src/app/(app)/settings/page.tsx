@@ -4,6 +4,11 @@ import { getAppVersion } from "@/lib/app-version";
 import { getClickUpCredentialStatus } from "@/lib/clickup";
 import styles from "../entities.module.css";
 import { ClickUpSettingsCard } from "./clickup-settings-card";
+import { MileageSettingsCard } from "./mileage-settings-card";
+import { MapsSettingsCard } from "./maps-settings-card";
+import { getDatabase } from "@/lib/dashboard-state";
+import { getMileageRate } from "@/lib/mileage";
+import { getMapsStatus } from "@/lib/maps";
 
 // Protection state is runtime environment, never build-time.
 export const dynamic = "force-dynamic";
@@ -18,6 +23,8 @@ export default async function SettingsPage() {
   const authConfigured = isAuthConfigured();
   const runningOpen = !authConfigured && allowUnprotected();
   const clickUpStatus = await getClickUpCredentialStatus();
+  const mileageRate = getMileageRate(getDatabase());
+  const mapsStatus = getMapsStatus(getDatabase());
 
   return (
     <main className={styles.page}>
@@ -56,6 +63,10 @@ export default async function SettingsPage() {
         </section>
 
         <ClickUpSettingsCard initialStatus={clickUpStatus} />
+
+        <MileageSettingsCard initialRate={mileageRate} />
+
+        <MapsSettingsCard initialStatus={mapsStatus} />
 
         <section className={styles.card}>
           <div className={styles.rowTitle}>ClickUp task association</div>
