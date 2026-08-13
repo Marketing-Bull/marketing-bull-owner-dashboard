@@ -1,70 +1,74 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Contrast, Moon, Sun } from "lucide-react";
+import { useEffect, useSyncExternalStore } from "react";
+import { Palette } from "lucide-react";
 import styles from "./theme-switcher.module.css";
 
 export type ThemeId = "paper" | "midnight" | "contrast";
 
 const THEME_STORAGE_KEY = "owner-dashboard-theme";
+const THEME_EVENT = "owner-dashboard-theme-change";
 
-const THEMES: Array<{
-  id: ThemeId;
-  label: string;
-  description: string;
-  icon: typeof Sun;
-}> = [
-  { id: "paper", label: "Paper", description: "Warm light", icon: Sun },
-  { id: "midnight", label: "Midnight", description: "Low-light dark", icon: Moon },
-  { id: "contrast", label: "Contrast", description: "Maximum clarity", icon: Contrast }
+const THEMES: Array<{ id: ThemeId; label: string; description: string }> = [
+  { id: "paper", label: "Paper", description: "Warm light" },
+  { id: "midnight", label: "Midnight", description: "Low-light dark" },
+  { id: "contrast", label: "Contrast", description: "Maximum clarity" }
 ];
+
+function isTheme(value: string | null): value is ThemeId {
+  return THEMES.some((option) => option.id === value);
+}
+
+function getThemeSnapshot(): ThemeId {
+  const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return isTheme(savedTheme) ? savedTheme : "paper";
+}
+
+function subscribeToTheme(onChange: () => void): () => void {
+  window.addEventListener(THEME_EVENT, onChange);
+  window.addEventListener("storage", onChange);
+  return () => {
+    window.removeEventListener(THEME_EVENT, onChange);
+    window.removeEventListener("storage", onChange);
+  };
+}
 
 function applyTheme(theme: ThemeId): void {
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme === "midnight" ? "dark" : "light";
-  window.localStorage.setItem(THEME_STORAGE_KEY, theme);
 }
 
 export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
-  const [theme, setTheme] = useState<ThemeId>("paper");
+  const theme = useSyncExternalStore<ThemeId>(subscribeToTheme, getThemeSnapshot, () => "paper");
 
   useEffect(() => {
-    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-    const nextTheme = THEMES.some((option) => option.id === savedTheme) ? (savedTheme as ThemeId) : "paper";
-    const frame = window.requestAnimationFrame(() => {
-      setTheme(nextTheme);
-      applyTheme(nextTheme);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
+    applyTheme(theme);
+  }, [theme]);
 
   function selectTheme(nextTheme: ThemeId) {
-    setTheme(nextTheme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
     applyTheme(nextTheme);
+    window.dispatchEvent(new Event(THEME_EVENT));
   }
 
   return (
-    <div className={`${styles.switcher} ${compact ? styles.compact : ""}`} aria-label="Color theme">
-      {compact ? <span className={styles.compactLabel}>Theme</span> : <span className={styles.label}>Theme</span>}
-      <div className={styles.controls} role="group" aria-label="Select color theme">
-        {THEMES.map((option) => {
-          const Icon = option.icon;
-          const active = theme === option.id;
-          return (
-            <button
-              key={option.id}
-              type="button"
-              className={`${styles.option} ${active ? styles.optionActive : ""}`}
-              onClick={() => selectTheme(option.id)}
-              aria-pressed={active}
-              title={`${option.label}: ${option.description}`}
-            >
-              <Icon size={14} aria-hidden="true" />
-              <span>{option.label}</span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <label className={`${styles.switcher} ${compact ? styles.compact : ""}`}>
+      <span className={styles.label}>{compact ? "Theme" : "Color theme"}</span>
+      <span className={styles.controlWrap}>
+        <Palette size={14} aria-hidden="true" className={styles.icon} />
+        <select
+          className={styles.select}
+          value={theme}
+          onChange={(event) => selectTheme(event.target.value as ThemeId)}
+          aria-label="Color theme"
+        >
+          {THEMES.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </span>
+    </label>
   );
 }
