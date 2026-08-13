@@ -11,8 +11,8 @@ describe("collapsible ids", () => {
     for (const id of DEFAULT_WIDGET_ORDER) {
       expect(isCollapsibleId(id), id).toBe(true);
     }
-    // The panel the request named by example is not part of the widget grid,
-    // so it needs its own id or it could never be collapsed.
+    // The Daily State panel is not part of the widget grid, so it needs its
+    // own id or it could never be collapsed.
     expect(isCollapsibleId(HYPERFOCUS_PANEL_ID)).toBe(true);
     expect(COLLAPSIBLE_IDS).toHaveLength(DEFAULT_WIDGET_ORDER.length + 1);
   });

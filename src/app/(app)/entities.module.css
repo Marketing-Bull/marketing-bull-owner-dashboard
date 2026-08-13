@@ -1,4 +1,4 @@
-/* Shared styles for the Clients and Projects management pages. */
+/* Shared styles for the Clients, Projects, and Time management pages. */
 
 .page {
   min-height: 100vh;
@@ -194,6 +194,14 @@
   width: 100%;
 }
 
+.readonlyValue {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .textarea {
   min-height: 64px;
   resize: vertical;
@@ -232,4 +240,49 @@
   color: var(--muted);
   font-size: 14px;
   padding: 10px 4px;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summaryItem {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.summaryValue {
+  font-size: 20px;
+  letter-spacing: -0.03em;
+}
+
+.rowDetails {
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 62ch;
+}
+
+.footerNote {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+@media (max-width: 680px) {
+  .summaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

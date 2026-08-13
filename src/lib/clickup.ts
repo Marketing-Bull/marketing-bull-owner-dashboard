@@ -10,11 +10,22 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getStoredClickUpApiKey, getStoredClickUpApiKeySummary } from "@/lib/app-settings";
+import { getDatabase } from "@/lib/dashboard-state";
 
 type SecretsFile = {
   env?: {
     CLICKUP_API_KEY?: string;
   };
+};
+
+export type ClickUpCredentialSource = "settings" | "environment" | "openclaw" | null;
+
+export type ClickUpCredentialStatus = {
+  configured: boolean;
+  source: ClickUpCredentialSource;
+  maskedValue: string | null;
+  updatedAt: string | null;
 };
 
 /** ClickUp status types. `closed` and `done` both mean finished. */
@@ -36,10 +47,74 @@ export function clickUpApiBase(): string {
   );
 }
 
-export async function getClickUpApiKey(): Promise<string | null> {
-  const raw = await readFile(join(homedir(), ".openclaw", "secrets.json"), "utf8");
+function maskFallbackSecret(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= 4) return "configured";
+  return `********${trimmed.slice(-4)}`;
+}
+
+async function readOpenClawClickUpApiKey(): Promise<string | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(homedir(), ".openclaw", "secrets.json"), "utf8");
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
   const secrets = JSON.parse(raw) as SecretsFile;
   return secrets.env?.CLICKUP_API_KEY?.trim() || null;
+}
+
+export async function getClickUpApiKey(): Promise<string | null> {
+  const stored = getStoredClickUpApiKey(getDatabase());
+  if (stored) return stored;
+
+  const envKey = process.env.CLICKUP_API_KEY?.trim();
+  if (envKey) return envKey;
+
+  return readOpenClawClickUpApiKey();
+}
+
+export async function getClickUpCredentialStatus(): Promise<ClickUpCredentialStatus> {
+  const stored = getStoredClickUpApiKeySummary(getDatabase());
+  if (stored.configured) {
+    return {
+      configured: true,
+      source: "settings",
+      maskedValue: stored.maskedValue,
+      updatedAt: stored.updatedAt
+    };
+  }
+
+  const envKey = process.env.CLICKUP_API_KEY?.trim();
+  if (envKey) {
+    return {
+      configured: true,
+      source: "environment",
+      maskedValue: maskFallbackSecret(envKey),
+      updatedAt: null
+    };
+  }
+
+  const openClawKey = await readOpenClawClickUpApiKey();
+  if (openClawKey) {
+    return {
+      configured: true,
+      source: "openclaw",
+      maskedValue: maskFallbackSecret(openClawKey),
+      updatedAt: null
+    };
+  }
+
+  return {
+    configured: false,
+    source: null,
+    maskedValue: null,
+    updatedAt: null
+  };
 }
 
 export async function fetchClickUpJson<T>(

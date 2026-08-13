@@ -121,5 +121,89 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
         CREATE INDEX idx_projects_client_id ON projects(client_id);
       `);
     }
+  },
+  {
+    // Consolidation phase 3: time becomes a domain record owned by this app.
+    // The rate is resolved when the row is saved and stored here permanently;
+    // later edits to a client or project rate must not rewrite history.
+    // Nullable start/end preserve mission-control's timer-shaped rows while
+    // the native entry flow stays hours-first (decision D7).
+    id: "003-time-entries",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE time_entries (
+          id TEXT PRIMARY KEY,
+          mc_id INTEGER UNIQUE,
+          client_id TEXT REFERENCES clients(id),
+          project_id TEXT REFERENCES projects(id),
+          date TEXT NOT NULL,
+          hours REAL NOT NULL CHECK (hours > 0 AND hours <= 24),
+          rate REAL NOT NULL DEFAULT 0 CHECK (rate >= 0),
+          billable INTEGER NOT NULL DEFAULT 1 CHECK (billable IN (0, 1)),
+          details TEXT NOT NULL DEFAULT '',
+          start_time TEXT,
+          end_time TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX idx_time_entries_date ON time_entries(date);
+        CREATE INDEX idx_time_entries_client_id ON time_entries(client_id);
+        CREATE INDEX idx_time_entries_project_id ON time_entries(project_id);
+      `);
+    }
+  },
+  {
+    // ClickUp is an upstream work queue, not the local source of truth. Cache
+    // assigned tasks here so the dashboard can render from SQLite, show when
+    // the last sync happened, and avoid hitting ClickUp on every page load.
+    id: "004-clickup-task-cache",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE clickup_sync_state (
+          source TEXT PRIMARY KEY,
+          last_synced_at TEXT,
+          last_attempted_at TEXT,
+          status TEXT NOT NULL DEFAULT 'never' CHECK (status IN ('never', 'success', 'error')),
+          error TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE clickup_tasks (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          url TEXT,
+          due_date TEXT,
+          date_updated TEXT,
+          priority TEXT,
+          status TEXT,
+          list_id TEXT,
+          list_name TEXT,
+          task_type TEXT,
+          raw_json TEXT NOT NULL,
+          synced_at TEXT NOT NULL
+        );
+
+        CREATE INDEX idx_clickup_tasks_due_date ON clickup_tasks(due_date);
+        CREATE INDEX idx_clickup_tasks_priority ON clickup_tasks(priority);
+        CREATE INDEX idx_clickup_tasks_list_id ON clickup_tasks(list_id);
+      `);
+    }
+  },
+  {
+    // App-owned configuration that should travel with the local SQLite store.
+    // The first key is ClickUp's API token; it is read before legacy
+    // environment/OpenClaw sources so Settings becomes the normal control
+    // surface for the integration.
+    id: "005-app-settings",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE app_settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    }
   }
 ];

@@ -118,6 +118,35 @@ export type Project = {
   updatedAt: string;
 };
 
+/**
+ * A saved unit of work. `rate` is a snapshot, not a live lookup: changing a
+ * client or project rate later never restates an existing entry.
+ */
+export type TimeEntry = {
+  id: string;
+  /** Row id in the retired mission-control database; null for native rows. */
+  mcId: number | null;
+  clientId: string | null;
+  projectId: string | null;
+  /** Local calendar day, `YYYY-MM-DD`. */
+  date: string;
+  hours: number;
+  rate: number;
+  billable: boolean;
+  details: string;
+  /** Legacy/timer compatibility; the native form is intentionally hours-first. */
+  startTime: string | null;
+  endTime: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TimeEntryRecentDefaults = {
+  clientId: string | null;
+  projectId: string | null;
+  billable: boolean;
+};
+
 export type ClickUpProject = {
   id: string;
   title: string;
@@ -149,6 +178,14 @@ export type UpNextTask = {
   listId?: string;
 };
 
+export type ClickUpSyncInfo = {
+  lastSyncedAt: string | null;
+  lastAttemptedAt: string | null;
+  stale: boolean;
+  refreshed: boolean;
+  error?: string;
+};
+
 export type DashboardData = {
   priorities: PriorityBucket[];
   hours: {
@@ -158,6 +195,7 @@ export type DashboardData = {
   upNext: UpNextTask[];
   source?: "live" | "sample";
   generatedAt?: number;
+  clickUpSync?: ClickUpSyncInfo;
   /** Set when a route served sample data; explains what the live fetch hit. */
   fallbackReason?: string;
 };

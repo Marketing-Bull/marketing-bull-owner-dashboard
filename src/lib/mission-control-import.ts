@@ -1,7 +1,7 @@
 /**
- * One-time (but re-runnable) import of Clients and Projects from the retired
- * mission-control database. Consolidation phase 2; time entries, expenses and
- * mileage follow in phases 3-4 using the same mc_id mapping.
+ * One-time (but re-runnable) import of Clients, Projects, and Time Entries
+ * from the retired mission-control database. Consolidation phases 2–3;
+ * expenses and mileage follow in phase 4 using the same mc_id mapping.
  *
  * Idempotent by design: every mission-control row keeps its original id in
  * `mc_id`, and the import upserts on it. Running the import twice, or running
@@ -33,6 +33,13 @@ import {
   type ProjectInput
 } from "@/lib/entities";
 import { CLIENT_STATUSES, PAYMENT_TYPES, type PaymentType } from "@/lib/types";
+import {
+  createTimeEntry,
+  getTimeEntryByMcId,
+  isDateKey,
+  updateTimeEntry,
+  type TimeEntryInput
+} from "@/lib/time-entries";
 
 type McRow = Record<string, unknown>;
 
@@ -40,6 +47,7 @@ export type ImportCounts = { inserted: number; updated: number; skipped: number 
 export type ImportSummary = {
   clients: ImportCounts;
   projects: ImportCounts;
+  timeEntries: ImportCounts;
   warnings: string[];
 };
 
@@ -125,10 +133,78 @@ export function mapMcProject(row: McRow, warnings: string[]): ProjectInput & { m
   };
 }
 
-export function runMissionControlImport(mc: DatabaseSync, dash: DatabaseSync): ImportSummary {
+function timeEntryDate(row: McRow, warnings: string[]): string | null {
+  const mcId = Number(row.id);
+  const rawDate = str(row.entry_date).trim();
+  const datePrefix = rawDate.slice(0, 10);
+  if (isDateKey(datePrefix)) return datePrefix;
+
+  // The profiled live file has one `10:30` in entry_date. The original day is
+  // gone, but created_at still gives a defensible day; make the repair loud.
+  const createdDate = str(row.created_at).trim().slice(0, 10);
+  if (isDateKey(createdDate)) {
+    warnings.push(
+      `time entry mc_id=${mcId}: invalid entry_date "${rawDate}" replaced with created_at day ${createdDate}`
+    );
+    return createdDate;
+  }
+
+  warnings.push(`time entry mc_id=${mcId}: no valid entry_date or created_at day; skipped`);
+  return null;
+}
+
+function timeEntryHours(row: McRow, warnings: string[]): number | null {
+  const mcId = Number(row.id);
+  const direct = num(row.duration_hours);
+  if (direct != null && direct > 0 && direct <= 24) return direct;
+
+  const minutes = num(row.duration_minutes);
+  if (minutes != null && minutes > 0 && minutes <= 24 * 60) return minutes / 60;
+
+  warnings.push(`time entry mc_id=${mcId}: invalid duration; skipped`);
+  return null;
+}
+
+function timeEntryDetails(row: McRow): string {
+  const parts: string[] = [];
+  const description = str(row.description).trim();
+  const notes = str(row.notes).trim();
+  const taskTitle = str(row.task_title).trim();
+  if (description) parts.push(description);
+  if (notes && notes !== description) parts.push(notes);
+  if (taskTitle) parts.push(`Task: ${taskTitle}`);
+  return parts.join("\n\n");
+}
+
+export function mapMcTimeEntry(
+  row: McRow,
+  warnings: string[]
+): (TimeEntryInput & { mcId: number; mcClientId: number | null; mcProjectId: number | null }) | null {
+  const date = timeEntryDate(row, warnings);
+  const hours = timeEntryHours(row, warnings);
+  if (!date || hours == null) return null;
+
+  const legacyRate = num(row.hourly_rate);
+  return {
+    mcId: Number(row.id),
+    mcClientId: num(row.client_id),
+    mcProjectId: num(row.project_id),
+    date,
+    hours,
+    billable: Boolean(row.is_billable),
+    details: timeEntryDetails(row),
+    startTime: str(row.start_time).trim() || null,
+    endTime: str(row.end_time).trim() || null,
+    frozenRate: legacyRate != null && legacyRate >= 0 ? legacyRate : undefined,
+    createdAt: str(row.created_at) || undefined
+  };
+}
+
+function importMissionControlRows(mc: DatabaseSync, dash: DatabaseSync): ImportSummary {
   const warnings: string[] = [];
   const clients: ImportCounts = { inserted: 0, updated: 0, skipped: 0 };
   const projects: ImportCounts = { inserted: 0, updated: 0, skipped: 0 };
+  const timeEntries: ImportCounts = { inserted: 0, updated: 0, skipped: 0 };
 
   const mcClients = mc.prepare("SELECT * FROM clients ORDER BY id").all() as McRow[];
   for (const row of mcClients) {
@@ -190,5 +266,88 @@ export function runMissionControlImport(mc: DatabaseSync, dash: DatabaseSync): I
     }
   }
 
-  return { clients, projects, warnings };
+  const mcTimeEntries = mc.prepare(`
+    SELECT te.*, t.title AS task_title
+    FROM time_entries te
+    LEFT JOIN tasks t ON t.id = te.task_id
+    ORDER BY te.id
+  `).all() as McRow[];
+
+  for (const row of mcTimeEntries) {
+    const input = mapMcTimeEntry(row, warnings);
+    if (!input) {
+      timeEntries.skipped += 1;
+      continue;
+    }
+
+    let clientId: string | null = null;
+    if (input.mcClientId != null) {
+      const client = getClientByMcId(dash, input.mcClientId);
+      if (client) {
+        clientId = client.id;
+      } else {
+        warnings.push(
+          `time entry mc_id=${input.mcId}: client mc_id=${input.mcClientId} not found; imported unassigned`
+        );
+      }
+    }
+
+    let projectId: string | null = null;
+    if (input.mcProjectId != null) {
+      const project = getProjectByMcId(dash, input.mcProjectId);
+      if (project) {
+        projectId = project.id;
+        // The project's imported client is authoritative when the legacy time
+        // row omitted or contradicted its own client_id.
+        if (clientId && project.clientId && clientId !== project.clientId) {
+          warnings.push(
+            `time entry mc_id=${input.mcId}: client disagreed with project owner; project client used`
+          );
+          clientId = project.clientId;
+        } else {
+          clientId ??= project.clientId;
+        }
+      } else {
+        warnings.push(
+          `time entry mc_id=${input.mcId}: project mc_id=${input.mcProjectId} not found; imported without project`
+        );
+      }
+    }
+
+    const existing = getTimeEntryByMcId(dash, input.mcId);
+    const entryInput: TimeEntryInput = {
+      mcId: input.mcId,
+      date: input.date,
+      hours: input.hours,
+      billable: input.billable,
+      details: input.details,
+      frozenRate: input.frozenRate,
+      startTime: input.startTime,
+      endTime: input.endTime,
+      createdAt: input.createdAt
+    };
+    if (existing) {
+      updateTimeEntry(dash, existing.id, { ...entryInput, clientId, projectId });
+      timeEntries.updated += 1;
+    } else {
+      createTimeEntry(dash, { ...entryInput, clientId, projectId });
+      timeEntries.inserted += 1;
+    }
+  }
+
+  return { clients, projects, timeEntries, warnings };
+}
+
+export function runMissionControlImport(mc: DatabaseSync, dash: DatabaseSync): ImportSummary {
+  // All three entity layers move together. A malformed legacy row must not
+  // leave clients updated but time only half imported.
+  dash.exec("BEGIN");
+  try {
+    const summary = importMissionControlRows(mc, dash);
+    dash.exec("COMMIT");
+    return summary;
+  } catch (error) {
+    dash.exec("ROLLBACK");
+    throw error;
+  }
 }

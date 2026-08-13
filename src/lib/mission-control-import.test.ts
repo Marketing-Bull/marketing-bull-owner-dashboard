@@ -1,7 +1,8 @@
 /**
  * The mission-control import, against a synthetic MC database that replicates
  * the live file's schema and its dirty data (statuses in three spellings, a
- * soft-deleted project, a dangling client reference, a nameless row).
+ * soft-deleted project, dangling references, a nameless row, an invalid time
+ * date, and an invalid duration).
  *
  * The properties that matter: idempotence (running twice converges instead of
  * duplicating), nothing silently guessed (every fix-up is a warning), and
@@ -17,6 +18,7 @@ import { listClients, listProjects } from "@/lib/entities";
 import { runMigrations } from "@/lib/migrations";
 import { runMissionControlImport } from "@/lib/mission-control-import";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
+import { listTimeEntries } from "@/lib/time-entries";
 
 let open: DatabaseSync[] = [];
 
@@ -59,6 +61,15 @@ function mcDb(): DatabaseSync {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       hourly_rate REAL, session_key TEXT, rag_last_indexed TEXT
     );
+    CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
+    CREATE TABLE time_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER, task_id INTEGER, client_id INTEGER,
+      description TEXT, entry_date TEXT NOT NULL, start_time TEXT, end_time TEXT,
+      duration_minutes INTEGER, duration_hours REAL, hourly_rate REAL,
+      is_billable INTEGER DEFAULT 1, notes TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   const addClient = db.prepare(
@@ -70,6 +81,7 @@ function mcDb(): DatabaseSync {
   addClient.run(4, "Maybe Inc", "prospect", 0, "one-time", "", "", "", "", "2025-03-01 09:00:00");
   addClient.run(5, "Mystery", "vip", 0, "quarterly", "", "", "", "", "2025-04-01 09:00:00");
   addClient.run(6, "   ", "active", 0, "mrr", "", "", "", "", "2025-05-01 09:00:00");
+  db.prepare("UPDATE clients SET hourly_rate = 110 WHERE id = 1").run();
 
   const addProject = db.prepare(
     "INSERT INTO projects (id, name, status, description, client_id, is_deleted, hourly_rate) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -79,6 +91,19 @@ function mcDb(): DatabaseSync {
   addProject.run(12, "Ghost", "active", "", 99, 0, null); // dangling client
   addProject.run(13, "Deleted", "active", "", 1, 1, null); // soft-deleted
   addProject.run(14, "Standalone", "active", "", null, 0, null);
+
+  db.prepare("INSERT INTO tasks (id, title) VALUES (?, ?)").run(50, "Ship the landing page");
+  const addTime = db.prepare(`
+    INSERT INTO time_entries (
+      id, project_id, task_id, client_id, description, entry_date, start_time,
+      end_time, duration_minutes, duration_hours, hourly_rate, is_billable,
+      notes, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  addTime.run(100, 10, 50, 1, "Build", "2026-03-10", "09:00", "11:00", null, 2, 125, 1, "QA", "2026-03-10 12:00:00");
+  addTime.run(101, 11, null, 1, "Review", "2026-03-11", "", "", 90, null, null, 1, "", "2026-03-11 12:00:00");
+  addTime.run(102, 10, null, 1, "Bad date repaired", "10:30", "10:30", "", null, 1, null, 0, "", "2026-03-12 12:00:00");
+  addTime.run(103, 10, null, 1, "No duration", "2026-03-13", "", "", null, null, null, 1, "", "2026-03-13 12:00:00");
 
   open.push(db);
   return db;
@@ -92,6 +117,7 @@ describe("runMissionControlImport", () => {
 
     expect(summary.clients).toEqual({ inserted: 5, updated: 0, skipped: 1 });
     expect(summary.projects).toEqual({ inserted: 4, updated: 0, skipped: 1 });
+    expect(summary.timeEntries).toEqual({ inserted: 3, updated: 0, skipped: 1 });
 
     const clients = listClients(dash, { includeArchived: true });
     const byName = new Map(clients.map((c) => [c.name, c]));
@@ -120,6 +146,17 @@ describe("runMissionControlImport", () => {
     expect(summary.warnings.join("\n")).toMatch(/Ghost.*not found/);
     expect(projByName.has("Deleted")).toBe(false);
     expect(projByName.get("Standalone")?.clientId).toBeNull();
+
+    const entries = listTimeEntries(dash);
+    const byMcId = new Map(entries.map((entry) => [entry.mcId, entry]));
+    expect(byMcId.get(100)?.rate).toBe(125);
+    expect(byMcId.get(100)?.details).toContain("Build\n\nQA\n\nTask: Ship the landing page");
+    expect(byMcId.get(101)?.hours).toBe(1.5);
+    expect(byMcId.get(101)?.rate).toBe(175);
+    expect(byMcId.get(102)?.date).toBe("2026-03-12");
+    expect(byMcId.get(102)?.billable).toBe(false);
+    expect(summary.warnings.join("\n")).toMatch(/invalid entry_date.*created_at day/);
+    expect(summary.warnings.join("\n")).toMatch(/invalid duration/);
   });
 
   it("is idempotent and converges on the source's newest values", () => {
@@ -134,6 +171,7 @@ describe("runMissionControlImport", () => {
     expect(second.clients.inserted).toBe(0);
     expect(second.clients.updated).toBe(5);
     expect(second.projects.inserted).toBe(0);
+    expect(second.timeEntries).toEqual({ inserted: 0, updated: 3, skipped: 1 });
 
     const clients = listClients(dash, { includeArchived: true });
     expect(clients.filter((c) => c.name === "Acme")).toHaveLength(1);
@@ -142,5 +180,17 @@ describe("runMissionControlImport", () => {
     // Native rows (no mc_id) are untouched by a re-run.
     const projects = listProjects(dash, { includeArchived: true });
     expect(projects.filter((p) => p.name === "Website")).toHaveLength(1);
+    expect(listTimeEntries(dash).filter((entry) => entry.mcId === 100)).toHaveLength(1);
+  });
+
+  it("rolls every layer back if a later import layer fails", () => {
+    const mc = mcDb();
+    const dash = dashDb();
+    mc.exec("DROP TABLE time_entries");
+
+    expect(() => runMissionControlImport(mc, dash)).toThrow(/time_entries/);
+    expect(listClients(dash, { includeArchived: true })).toHaveLength(0);
+    expect(listProjects(dash, { includeArchived: true })).toHaveLength(0);
+    expect(listTimeEntries(dash)).toHaveLength(0);
   });
 });

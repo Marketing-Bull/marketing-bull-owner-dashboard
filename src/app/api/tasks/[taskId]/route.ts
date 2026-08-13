@@ -6,6 +6,8 @@ import {
   putClickUpJson,
   type ClickUpList
 } from "@/lib/clickup";
+import { deleteCachedClickUpTask } from "@/lib/clickup-task-cache";
+import { getDatabase } from "@/lib/dashboard-state";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +67,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ taskI
     }
 
     await putClickUpJson(`/task/${taskId}`, { status }, apiKey);
+    if (done) {
+      deleteCachedClickUpTask(getDatabase(), taskId);
+    }
 
     return NextResponse.json({ ok: true, status }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

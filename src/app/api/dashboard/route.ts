@@ -1,41 +1,18 @@
 import { NextResponse } from "next/server";
 import { fetchClickUpJson, getClickUpApiKey } from "@/lib/clickup";
+import {
+  ensureClickUpTasksFresh,
+  getClickUpTaskSyncInfo,
+  type ClickUpTaskCacheInput
+} from "@/lib/clickup-task-cache";
 import { normalizeDashboardData } from "@/lib/dashboard-data";
-import { loadDashboardState } from "@/lib/dashboard-state";
+import { getDatabase, loadDashboardState } from "@/lib/dashboard-state";
 import { reportFallback } from "@/lib/fallback";
 import { SAMPLE_DASHBOARD_DATA } from "@/lib/sample-data";
-import type { DashboardData, HoursEntry, PriorityBucket, UpNextTask } from "@/lib/types";
+import { buildLocalHoursWindows } from "@/lib/time-entries";
+import type { DashboardData, PriorityBucket, UpNextTask } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
-
-type ClickUpTask = {
-  id: string;
-  name: string;
-  url?: string;
-  due_date?: string | null;
-  date_updated?: string;
-  priority?: {
-    priority?: string | null;
-  } | null;
-  status?: {
-    status?: string;
-  };
-  list?: {
-    id?: string;
-    name?: string;
-  };
-  task_type?: string | null;
-};
-
-type ClickUpTimeEntry = {
-  duration?: string;
-  task?: {
-    list?: {
-      name?: string;
-    };
-    name?: string;
-  };
-};
 
 type BottleneckContext = {
   bottleneck: string;
@@ -44,20 +21,10 @@ type BottleneckContext = {
 };
 
 type ClickUpTasksResponse = {
-  tasks: ClickUpTask[];
+  tasks: ClickUpTaskCacheInput[];
 };
 
-function startOfCurrentWeek(): Date {
-  const now = new Date();
-  const day = now.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  const start = new Date(now);
-  start.setDate(now.getDate() + diff);
-  start.setHours(0, 0, 0, 0);
-  return start;
-}
-
-function parsePriority(task: ClickUpTask): UpNextTask["priority"] {
+function parsePriority(task: ClickUpTaskCacheInput): UpNextTask["priority"] {
   const nameMatch = task.name.match(/\[(P[0-3])\]/i);
   if (nameMatch) return nameMatch[1].toUpperCase() as UpNextTask["priority"];
   const direct = task.priority?.priority;
@@ -81,7 +48,7 @@ function formatDueLabel(dueDate: string | null | undefined): string {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(date);
 }
 
-function sortTasksForUpNext(a: ClickUpTask, b: ClickUpTask): number {
+function sortTasksForUpNext(a: ClickUpTaskCacheInput, b: ClickUpTaskCacheInput): number {
   const aDue = a.due_date ? Number(a.due_date) : Number.POSITIVE_INFINITY;
   const bDue = b.due_date ? Number(b.due_date) : Number.POSITIVE_INFINITY;
   if (aDue !== bDue) return aDue - bDue;
@@ -123,7 +90,7 @@ function tokenizeContext(...parts: string[]): string[] {
   );
 }
 
-function scoreTaskAgainstBottleneck(task: ClickUpTask, context: BottleneckContext): number {
+function scoreTaskAgainstBottleneck(task: ClickUpTaskCacheInput, context: BottleneckContext): number {
   const haystack = [
     task.name,
     task.list?.name,
@@ -170,7 +137,7 @@ function scoreTaskAgainstBottleneck(task: ClickUpTask, context: BottleneckContex
   return score;
 }
 
-function buildPriorityBuckets(tasks: ClickUpTask[]): PriorityBucket[] {
+function buildPriorityBuckets(tasks: ClickUpTaskCacheInput[]): PriorityBucket[] {
   const buckets = new Map<UpNextTask["priority"], PriorityBucket>([
     ["P0", { key: "P0", label: "Critical", projects: [] }],
     ["P1", { key: "P1", label: "This week", projects: [] }],
@@ -194,7 +161,7 @@ function buildPriorityBuckets(tasks: ClickUpTask[]): PriorityBucket[] {
   return ["P0", "P1", "P2", "P3"].map((key) => buckets.get(key as UpNextTask["priority"])!);
 }
 
-function buildUpNext(tasks: ClickUpTask[], context?: BottleneckContext): UpNextTask[] {
+function buildUpNext(tasks: ClickUpTaskCacheInput[], context?: BottleneckContext): UpNextTask[] {
   const rankedTasks = tasks.filter((task) => (task.task_type || "").toLowerCase() !== "contact");
 
   if (context && context.bottleneck.trim()) {
@@ -224,22 +191,9 @@ function buildUpNext(tasks: ClickUpTask[], context?: BottleneckContext): UpNextT
     }));
 }
 
-function buildHours(entries: ClickUpTimeEntry[]): HoursEntry[] {
-  const grouped = new Map<string, number>();
-  for (const entry of entries) {
-    const key = entry.task?.list?.name || entry.task?.name || "Other";
-    const hours = Number(entry.duration || 0) / 3_600_000;
-    if (!Number.isFinite(hours) || hours <= 0) continue;
-    grouped.set(key, (grouped.get(key) || 0) + hours);
-  }
-  return [...grouped.entries()]
-    .map(([label, hours]) => ({ label, hours: Number(hours.toFixed(1)) }))
-    .sort((a, b) => b.hours - a.hours)
-    .slice(0, 6);
-}
-
 export async function GET() {
   const upstream = process.env.OWNER_DASHBOARD_DATA_URL?.trim();
+  const db = getDatabase();
 
   if (upstream) {
     try {
@@ -256,7 +210,12 @@ export async function GET() {
       }
       // Normalize the proxied body so a drifting upstream cannot hand the
       // client a shape the dashboard will crash on.
-      return NextResponse.json(normalizeDashboardData(json), {
+      const normalized = normalizeDashboardData(json);
+      // Phase 3 makes local time_entries canonical even when task/priorities
+      // arrive through the legacy aggregate upstream.
+      normalized.hours = buildLocalHoursWindows(db);
+      normalized.clickUpSync = getClickUpTaskSyncInfo(db);
+      return NextResponse.json(normalized, {
         headers: { "Cache-Control": "no-store" }
       });
     } catch (error) {
@@ -268,8 +227,6 @@ export async function GET() {
   }
 
   try {
-    const apiKey = await getClickUpApiKey();
-    if (!apiKey) throw new Error("Missing ClickUp API key");
     const state = loadDashboardState();
     const context: BottleneckContext = {
       bottleneck: state.manual.hyperfocus.bottleneck,
@@ -286,41 +243,42 @@ export async function GET() {
     taskParams.append("subtasks", "true");
     taskParams.append("page", "0");
 
-    // The ClickUp "Projects" and "Clients" list fetches (and their hardcoded
-    // list ids) are gone: consolidation phase 2 makes both real local entities
-    // served by /api/clients and /api/projects. ClickUp keeps tasks and time.
-    const [tasksResponse, weekTimeResponse, monthTimeResponse] = await Promise.all([
-      fetchClickUpJson<ClickUpTasksResponse>(`/team/${teamId}/task`, taskParams, apiKey),
-      fetchClickUpJson<{ data: ClickUpTimeEntry[] }>(
-        `/team/${teamId}/time_entries`,
-        new URLSearchParams({
-          start_date: String(startOfCurrentWeek().getTime()),
-          end_date: String(Date.now()),
-          assignee: assigneeId
-        }),
-        apiKey
-      ),
-      fetchClickUpJson<{ data: ClickUpTimeEntry[] }>(
-        `/team/${teamId}/time_entries`,
-        new URLSearchParams({
-          start_date: String(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).getTime()),
-          end_date: String(Date.now()),
-          assignee: assigneeId
-        }),
-        apiKey
-      )
-    ]);
+    const sync = await ensureClickUpTasksFresh(
+      db,
+      async () => {
+        const apiKey = await getClickUpApiKey();
+        if (!apiKey) throw new Error("Missing ClickUp API key");
+        const tasksResponse = await fetchClickUpJson<ClickUpTasksResponse>(
+          `/team/${teamId}/task`,
+          taskParams,
+          apiKey
+        );
+        return tasksResponse.tasks || [];
+      }
+    );
 
-    const tasks = tasksResponse.tasks || [];
+    if (sync.error && !sync.hadCache) {
+      const fallbackReason = reportFallback("/api/dashboard ClickUp sync", sync.error);
+      return NextResponse.json(
+        {
+          ...SAMPLE_DASHBOARD_DATA,
+          hours: buildLocalHoursWindows(db),
+          clickUpSync: sync.sync,
+          fallbackReason,
+          generatedAt: Date.now()
+        },
+        { headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    const tasks = sync.tasks;
     const liveData: DashboardData = {
       priorities: buildPriorityBuckets(tasks),
-      hours: {
-        week: buildHours(weekTimeResponse.data || []),
-        month: buildHours(monthTimeResponse.data || [])
-      },
+      hours: buildLocalHoursWindows(db),
       upNext: buildUpNext(tasks, context),
       source: "live",
-      generatedAt: Date.now()
+      generatedAt: Date.now(),
+      clickUpSync: sync.sync
     };
 
     return NextResponse.json(liveData, {
@@ -331,7 +289,13 @@ export async function GET() {
     // indistinguishable from real ones.
     const fallbackReason = reportFallback("/api/dashboard", error);
     return NextResponse.json(
-      { ...SAMPLE_DASHBOARD_DATA, fallbackReason, generatedAt: Date.now() },
+      {
+        ...SAMPLE_DASHBOARD_DATA,
+        hours: buildLocalHoursWindows(db),
+        clickUpSync: getClickUpTaskSyncInfo(db),
+        fallbackReason,
+        generatedAt: Date.now()
+      },
       { headers: { "Cache-Control": "no-store" } }
     );
   }

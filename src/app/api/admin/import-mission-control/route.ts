@@ -51,6 +51,7 @@ export async function POST(request: Request) {
     // Fail with a real message if the file is not the expected database.
     mc.prepare("SELECT COUNT(*) FROM clients").get();
     mc.prepare("SELECT COUNT(*) FROM projects").get();
+    mc.prepare("SELECT COUNT(*) FROM time_entries").get();
 
     const summary = runMissionControlImport(mc, getDatabase());
     return NextResponse.json(summary, { headers: { "Cache-Control": "no-store" } });
