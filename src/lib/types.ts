@@ -287,6 +287,47 @@ export type UpNextTask = {
   listId?: string;
 };
 
+/** How a cached task was matched to a local client or project. */
+export const CLICKUP_ASSOCIATION_SOURCES = [
+  "project-custom-field",
+  "project-tag",
+  "project-list",
+  "client-custom-field",
+  "client-tag",
+  "client-folder",
+  "client-space",
+  "none"
+] as const;
+
+export type ClickUpAssociationSource = (typeof CLICKUP_ASSOCIATION_SOURCES)[number];
+
+/**
+ * One cached ClickUp task as the Tasks screen reads it. ClickUp reports due and
+ * updated stamps as epoch milliseconds; they stay numbers here so sorting and
+ * "overdue" mean the same thing on the server and in the browser.
+ */
+export type ClickUpTaskRecord = {
+  id: string;
+  name: string;
+  url: string | null;
+  dueDate: number | null;
+  updatedAt: number | null;
+  priority: string | null;
+  status: string | null;
+  listId: string | null;
+  listName: string | null;
+  folderName: string | null;
+  spaceId: string | null;
+  spaceName: string | null;
+  clientId: string | null;
+  clientName: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  associationSource: ClickUpAssociationSource;
+  taskType: string | null;
+  syncedAt: string;
+};
+
 export type ClickUpSyncInfo = {
   lastSyncedAt: string | null;
   lastAttemptedAt: string | null;

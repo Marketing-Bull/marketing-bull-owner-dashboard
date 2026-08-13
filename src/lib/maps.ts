@@ -9,7 +9,14 @@ const CACHE_MS = 30 * 24 * 60 * 60 * 1000;
 const buckets = new Map<string, { count: number; resetAt: number }>();
 
 export class MapsError extends Error {
-  constructor(message: string, public code: "not_configured" | "invalid_input" | "rate_limited" | "timeout" | "provider_error" | "no_route") { super(message); }
+  constructor(
+    message: string,
+    public code: "not_configured" | "invalid_input" | "rate_limited" | "timeout" | "provider_error" | "no_route",
+    /** HTTP status the provider returned, when the failure came from the provider. */
+    public status: number | null = null,
+    /** Provider-specific error code (OpenRouteService uses 2003, 2004, …). */
+    public providerCode: number | null = null
+  ) { super(message); }
 }
 export type PlaceSuggestion = { id: string; label: string; longitude: number; latitude: number };
 export type RouteAlternative = { id: string; label: string; miles: number; durationMinutes: number; metadata: Record<string, unknown> };
@@ -26,12 +33,42 @@ export function assertMapsRateLimit(key: string): void {
   bucket.count += 1;
 }
 
+/**
+ * Pulls the provider's own explanation out of an error body.
+ *
+ * OpenRouteService answers `{ error: { code, message } }`, sometimes
+ * `{ error: "text" }`. Without this, every rejected request reached the user as
+ * a bare status code — "Maps provider request failed (400)" says nothing about
+ * which input the provider refused or which limit was crossed.
+ */
+function providerFailure(json: unknown): { message: string; providerCode: number | null } {
+  const root = json && typeof json === "object" ? (json as Record<string, unknown>) : {};
+  const error = root.error;
+  if (typeof error === "string" && error.trim()) return { message: error.trim(), providerCode: null };
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const code = Number(record.code);
+    const message = typeof record.message === "string" ? record.message.trim() : "";
+    if (message) return { message, providerCode: Number.isFinite(code) ? code : null };
+  }
+  const message = typeof root.message === "string" ? root.message.trim() : "";
+  return { message, providerCode: null };
+}
+
 async function fetchProvider<T>(url: string, init: RequestInit, timeoutMs = 8000): Promise<T> {
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...init, signal: controller.signal, cache: "no-store" });
     const json = await response.json().catch(() => null);
-    if (!response.ok) throw new MapsError(`Maps provider request failed (${response.status}).`, "provider_error");
+    if (!response.ok) {
+      const failure = providerFailure(json);
+      throw new MapsError(
+        `Maps provider request failed (${response.status}).${failure.message ? ` ${failure.message}` : ""}`,
+        response.status === 429 ? "rate_limited" : "provider_error",
+        response.status,
+        failure.providerCode
+      );
+    }
     return json as T;
   } catch (error) {
     if (error instanceof MapsError) throw error;
@@ -83,6 +120,22 @@ async function resolvePlace(db: DatabaseSync, value: unknown, label: string): Pr
 
 type DirectionsResponse = { routes?: Array<{ summary?: { distance?: number; duration?: number } }> };
 
+function directionsBody(start: PlaceSuggestion, end: PlaceSuggestion, withAlternatives: boolean): string {
+  return JSON.stringify({
+    coordinates: [[start.longitude, start.latitude], [end.longitude, end.latitude]],
+    instructions: false,
+    ...(withAlternatives ? { alternative_routes: { target_count: 3, weight_factor: 1.4, share_factor: 0.6 } } : {})
+  });
+}
+
+async function fetchDirections(apiKey: string, start: PlaceSuggestion, end: PlaceSuggestion, withAlternatives: boolean): Promise<DirectionsResponse> {
+  return fetchProvider<DirectionsResponse>(DIRECTIONS_URL, {
+    method: "POST",
+    headers: { Authorization: apiKey, "Content-Type": "application/json" },
+    body: directionsBody(start, end, withAlternatives)
+  });
+}
+
 export async function calculateDrivingRoutes(db: DatabaseSync, startValue: unknown, endValue: unknown): Promise<RouteResult> {
   const apiKey = getStoredMapsApiKey(db);
   if (!apiKey) throw new MapsError("Configure an OpenRouteService API key in Settings to calculate routes.", "not_configured");
@@ -90,7 +143,17 @@ export async function calculateDrivingRoutes(db: DatabaseSync, startValue: unkno
   const cacheKey = createHash("sha256").update(`${PROVIDER}|${start.longitude.toFixed(6)},${start.latitude.toFixed(6)}|${end.longitude.toFixed(6)},${end.latitude.toFixed(6)}`).digest("hex");
   const cached = db.prepare("SELECT response_json FROM mileage_route_cache WHERE cache_key=? AND expires_at>?").get(cacheKey, new Date().toISOString()) as { response_json?: string } | undefined;
   if (cached?.response_json) { try { return { ...(JSON.parse(cached.response_json) as RouteResult), cached: true }; } catch {} }
-  const response = await fetchProvider<DirectionsResponse>(DIRECTIONS_URL, { method: "POST", headers: { Authorization: apiKey, "Content-Type": "application/json" }, body: JSON.stringify({ coordinates: [[start.longitude, start.latitude], [end.longitude, end.latitude]], instructions: false, alternative_routes: { target_count: 3, weight_factor: 1.4, share_factor: 0.6 } }) });
+  // Alternative routes are the most restricted part of this request: the
+  // provider caps them by trip distance well below its single-route limit, so
+  // an ordinary drive could fail with nothing but a 400. Alternatives are a
+  // convenience — never let them cost the user the mileage they came for.
+  let response: DirectionsResponse;
+  try {
+    response = await fetchDirections(apiKey, start, end, true);
+  } catch (error) {
+    if (!(error instanceof MapsError) || error.status !== 400) throw error;
+    response = await fetchDirections(apiKey, start, end, false);
+  }
   const routes = (response.routes ?? []).flatMap((route, index) => { const meters = Number(route.summary?.distance); const seconds = Number(route.summary?.duration); if (!(meters > 0) || !(seconds > 0)) return []; return [{ id: `${cacheKey}-${index}`, label: index === 0 ? "Recommended route" : `Alternative ${index + 1}`, miles: Number((meters / 1609.344).toFixed(2)), durationMinutes: Math.round(seconds / 60), metadata: { distanceMeters: meters, durationSeconds: seconds, routeIndex: index } }]; });
   if (!routes.length) throw new MapsError("No driving route was found. Enter miles manually.", "no_route");
   const result: RouteResult = { provider: PROVIDER, start, end, routes, calculatedAt: new Date().toISOString(), cached: false };

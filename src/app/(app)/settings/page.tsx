@@ -4,9 +4,11 @@ import { getAppVersion } from "@/lib/app-version";
 import { getClickUpCredentialStatus } from "@/lib/clickup";
 import styles from "../entities.module.css";
 import { ClickUpSettingsCard } from "./clickup-settings-card";
+import { DropdownSettingsCard } from "./dropdown-settings-card";
 import { MileageSettingsCard } from "./mileage-settings-card";
 import { MapsSettingsCard } from "./maps-settings-card";
 import { getDatabase } from "@/lib/dashboard-state";
+import { DROPDOWN_LISTS, listDropdownOptions } from "@/lib/dropdown-options";
 import { getMileageRate } from "@/lib/mileage";
 import { getMapsStatus } from "@/lib/maps";
 
@@ -25,6 +27,7 @@ export default async function SettingsPage() {
   const clickUpStatus = await getClickUpCredentialStatus();
   const mileageRate = getMileageRate(getDatabase());
   const mapsStatus = getMapsStatus(getDatabase());
+  const expenseCategories = listDropdownOptions(getDatabase(), "expense.category", { includeInactive: true });
 
   return (
     <main className={styles.page}>
@@ -63,6 +66,13 @@ export default async function SettingsPage() {
         </section>
 
         <ClickUpSettingsCard initialStatus={clickUpStatus} />
+
+        <DropdownSettingsCard
+          listKey="expense.category"
+          title={DROPDOWN_LISTS["expense.category"].label}
+          description="The Category dropdown on the Expenses form. Renaming updates the records using an option; deactivating hides it from new entries and keeps it on old ones."
+          initialOptions={expenseCategories}
+        />
 
         <MileageSettingsCard initialRate={mileageRate} />
 

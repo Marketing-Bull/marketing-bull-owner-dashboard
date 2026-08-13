@@ -76,7 +76,9 @@
 .iconButton,
 .pageButton,
 .filterChip,
-.sortButton {
+.sortButton,
+.chip,
+.stepButton {
   border: 1px solid var(--line);
   background: var(--panel-strong);
   color: var(--text);
@@ -380,6 +382,73 @@
   background: var(--accent-soft);
 }
 
+.statusUrgent {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 32%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, white);
+}
+
+.overdueText {
+  color: var(--danger);
+  font-weight: 650;
+}
+
+/* A cell that opens the record sheet: reads as text, behaves as a button. */
+.linkCell {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.linkCell:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.linkCell:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.sourceNote {
+  margin: -6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.detailList {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0;
+}
+
+.detailList > div {
+  min-width: 0;
+}
+
+.detailList dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.detailList dd {
+  margin: 5px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .rowActions {
   display: flex;
   align-items: center;
@@ -565,6 +634,64 @@
   width: 22px;
   height: 22px;
   accent-color: var(--accent);
+}
+
+.hoursLabel {
+  display: block;
+}
+
+.hoursRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hoursRow .input {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.stepButton {
+  width: 46px;
+  min-height: 42px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  min-height: 36px;
+  border-radius: 9px;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.chipActive {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.chip:focus-visible,
+.stepButton:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.fieldError {
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .calculation {
@@ -888,8 +1015,19 @@
   .quietButton,
   .dangerButton,
   .input,
-  .select {
+  .select,
+  .stepButton {
     min-height: 46px;
+  }
+
+  .stepButton {
+    width: 52px;
+  }
+
+  .chip {
+    min-height: 44px;
+    padding: 0 16px;
+    font-size: 15px;
   }
 
   .filterSurface {
@@ -997,7 +1135,8 @@
   }
 
   .sheetForm,
-  .detailsGrid {
+  .detailsGrid,
+  .detailList {
     grid-template-columns: 1fr;
   }
 

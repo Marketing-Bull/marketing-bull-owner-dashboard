@@ -369,5 +369,61 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
         CREATE INDEX idx_mileage_route_cache_expires_at ON mileage_route_cache(expires_at);
       `);
     }
+  },
+  {
+    // User-editable vocabulary (redesign plan, "Dropdowns & defaults"). One
+    // normalized table keyed by `list_key` rather than a table per field, so
+    // adding the next list is data, not schema. `list_key` is validated against
+    // a code-owned registry in `@/lib/dropdown-options`; Settings can never
+    // introduce a list the application does not already know how to use.
+    //
+    // Options are seeded from the categories already in use so the first render
+    // of the new picker offers exactly what the imported data contains.
+    id: "010-dropdown-options",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE dropdown_options (
+          id TEXT PRIMARY KEY,
+          list_key TEXT NOT NULL,
+          label TEXT NOT NULL,
+          normalized_label TEXT NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+          is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX idx_dropdown_options_label ON dropdown_options(list_key, normalized_label);
+        CREATE INDEX idx_dropdown_options_lookup ON dropdown_options(list_key, is_active, sort_order);
+      `);
+
+      const used = db.prepare(`
+        SELECT MIN(label) AS label, COUNT(*) AS usage_count FROM (
+          SELECT TRIM(category) AS label FROM expenses WHERE TRIM(category) <> ''
+          UNION ALL
+          SELECT TRIM(category) AS label FROM recurring_expenses WHERE TRIM(category) <> ''
+        )
+        GROUP BY LOWER(label)
+        ORDER BY usage_count DESC, label COLLATE NOCASE
+      `).all() as Array<{ label?: unknown }>;
+
+      const labels = used.map((row) => String(row.label));
+      // A database with no expenses yet still needs somewhere to start.
+      const seeds = labels.length
+        ? labels
+        : ["Software", "Advertising", "Contract Labor", "Meals", "Office", "Travel", "Other"];
+
+      const now = new Date().toISOString();
+      const insert = db.prepare(`
+        INSERT INTO dropdown_options (
+          id, list_key, label, normalized_label, sort_order, is_active, is_default, metadata_json, created_at, updated_at
+        ) VALUES (?, 'expense.category', ?, ?, ?, 1, 0, '{}', ?, ?)
+      `);
+      seeds.forEach((label, index) => {
+        insert.run(crypto.randomUUID(), label, label.trim().toLowerCase(), index, now, now);
+      });
+    }
   }
 ];

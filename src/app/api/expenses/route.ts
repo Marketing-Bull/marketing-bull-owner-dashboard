@@ -10,6 +10,7 @@ import {
   parseExpenseQuery,
   queryExpenses
 } from "@/lib/expenses";
+import { getDefaultDropdownLabel, pickerLabels } from "@/lib/dropdown-options";
 import { TransactionQueryValidationError } from "@/lib/transaction-query";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,9 @@ export async function GET(request: Request) {
       expenses: result.items,
       recurringExpenses: listRecurringExpenses(db), recentDefaults: getRecentExpenseDefaults(db),
       accounts: listChartAccounts(db), categoryAccounts: listExpenseCategoryAccounts(db),
+      // Settings owns the Category vocabulary; the form offers exactly this.
+      categoryOptions: pickerLabels(db, "expense.category"),
+      defaultCategory: getDefaultDropdownLabel(db, "expense.category"),
       summary: {
         expenses: result.filteredTotals.expenses,
         income: result.filteredTotals.income,

@@ -106,7 +106,8 @@ describe("existing database without daily_history", () => {
       "006-expenses-mileage",
       "007-clickup-task-associations",
       "008-widget-visibility",
-      "009-mileage-maps"
+      "009-mileage-maps",
+      "010-dropdown-options"
     ]);
     upgraded.close();
 
