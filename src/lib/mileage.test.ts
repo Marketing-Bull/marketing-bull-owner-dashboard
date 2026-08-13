@@ -4,7 +4,19 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createClient, createProject } from "@/lib/entities";
-import { createMileageEntry, deleteMileageEntry, getMileageEntry, getMileageRate, getMileageSummary, listRecentTrips, mileageTotal, setMileageRate, updateMileageEntry } from "@/lib/mileage";
+import {
+  createMileageEntry,
+  deleteMileageEntry,
+  getMileageEntry,
+  getMileageRate,
+  getMileageSummary,
+  listRecentTrips,
+  mileageTotal,
+  parseMileageQuery,
+  queryMileageEntries,
+  setMileageRate,
+  updateMileageEntry
+} from "@/lib/mileage";
 import { runMigrations } from "@/lib/migrations";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
 
@@ -44,5 +56,52 @@ describe("mileage", () => {
     expect(getMileageSummary(db)).toEqual({ totalMiles: 20, reimbursement: 14, entries: 2 });
     deleteMileageEntry(db, first.id);
     expect(getMileageEntry(db, first.id)).toBeNull();
+  });
+
+  it("queries route fields, reimbursement ranges, filtered totals, and facets", () => {
+    const db = freshDb();
+    setMileageRate(db, 0.7);
+    const client = createClient(db, { name: "Acme" });
+    const project = createProject(db, { name: "Site", clientId: client.id });
+    const airport = createMileageEntry(db, {
+      projectId: project.id,
+      date: "2026-08-12",
+      tripName: "Airport run",
+      startAddress: "Office",
+      endAddress: "Airport",
+      purpose: "Client travel",
+      miles: 10,
+      roundTrip: true,
+      billable: true,
+      notes: "Terminal 2"
+    });
+    createMileageEntry(db, { date: "2026-08-13", tripName: "Bank", miles: 2 });
+
+    const result = queryMileageEntries(db, parseMileageQuery(new URLSearchParams({
+      clientId: client.id,
+      projectId: project.id,
+      search: "airport",
+      startAddress: "office",
+      endAddress: "airport",
+      purpose: "travel",
+      milesMin: "9",
+      milesMax: "11",
+      roundTrip: "true",
+      totalMilesMin: "20",
+      billable: "true",
+      notes: "terminal",
+      reimbursementMin: "14",
+      sort: "reimbursement"
+    })));
+    expect(result.items.map((entry) => entry.id)).toEqual([airport.id]);
+    expect(result.filteredTotals).toEqual({ entries: 1, totalMiles: 20, reimbursement: 14 });
+    expect(result.availableFacets.purposes).toEqual([{ value: "Client travel", count: 1 }]);
+    expect(result.availableFacets.roundTrip).toEqual([{ value: "1", count: 1 }]);
+  });
+
+  it("validates mileage query ranges and booleans", () => {
+    expect(() => parseMileageQuery(new URLSearchParams("roundTrip=sometimes"))).toThrow(/true or false/i);
+    expect(() => parseMileageQuery(new URLSearchParams("milesMin=5&milesMax=2"))).toThrow(/minimum/i);
+    expect(() => parseMileageQuery(new URLSearchParams("direction=sideways"))).toThrow(/one of/i);
   });
 });
