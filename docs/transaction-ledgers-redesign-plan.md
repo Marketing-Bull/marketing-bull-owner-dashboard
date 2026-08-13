@@ -104,7 +104,22 @@ Recurring configuration should be a separate explicit action, `Make recurring`, 
 
 ### Mileage form
 
-Lead with recent/favorite routes as large tap targets, then Date, From, To, One-way miles, Round trip, and Purpose. Show Total miles and reimbursement live. Client, Project, Billable, and Notes follow below. Reusing a recent route must fill route fields visibly and remain editable before save.
+Lead with recent/favorite routes as large tap targets, then Date, From, To, One-way miles, Round trip, and Purpose. Address fields use mobile-friendly autocomplete from the configured maps provider. After both endpoints are selected, calculate driving distance automatically and show the selected route, one-way distance, round-trip total, and reimbursement before save. Client, Project, Billable, and Notes follow below.
+
+The calculated distance is a suggestion, not an invisible overwrite: users can edit miles manually, see whether the saved value is provider-calculated or manual, and recalculate after changing an address. If multiple routes are returned, default to the provider's recommended driving route and allow selection among meaningful alternatives. Reusing a recent route must fill route fields visibly and remain editable before save.
+
+Maps failure must not block entry. On timeout, quota exhaustion, missing credentials, or no route, show a concise error and keep manual mileage available. Never send client, project, purpose, or notes to the maps provider—only the route inputs needed for geocoding and distance calculation.
+
+### Maps integration
+
+- Add a server-side maps adapter so provider credentials never reach the browser and the UI is not coupled directly to one vendor.
+- Complete the Existing Solutions Preflight before implementation and prefer a maintained provider with an adequate free tier or self-hosted option. Do not enable a paid API or incur spend without explicit approval.
+- Support address autocomplete/geocoding and driving-route distance. Store normalized display addresses plus provider place IDs when available.
+- Persist the actual miles saved, calculation source (`provider` or `manual`), provider name, calculated distance, selected route metadata, and calculation timestamp. Historical reimbursements must not change when providers or routes later change.
+- Cache identical normalized route calculations with a defined expiration to reduce latency, cost, and quota usage; do not cache failed responses as successful routes.
+- Apply request timeouts, rate limiting, input validation, and structured provider-error handling in the server adapter.
+- Put provider configuration and connection status in Settings. Secrets remain server-side; Settings may save/test/clear credentials using the same secure pattern as ClickUp.
+- Treat precise addresses and route history as sensitive operational data: log timings and error codes, not full addresses or provider payloads.
 
 ### Row actions and deletion
 
@@ -166,9 +181,14 @@ Extract shared transaction primitives instead of expanding the current page file
 - `src/app/(app)/expenses/page.tsx`: Expense/Recurring tabs, configuration, and forms
 - `src/app/(app)/mileage/page.tsx`: Mileage configuration, filters, columns, and form
 - `src/app/(app)/settings/dropdown-settings-card.tsx`: option-list management
+- `src/app/(app)/settings/maps-settings-card.tsx`: provider configuration and connection test
 - `src/app/api/dropdown-options/...`: settings endpoints
+- `src/app/api/maps/autocomplete/route.ts`: proxied address suggestions
+- `src/app/api/maps/distance/route.ts`: driving-route alternatives and distance
 - `src/lib/transaction-query.ts`: shared parsing/validation for list queries
 - `src/lib/dropdown-options.ts`: registry, validation, persistence, usage checks
+- `src/lib/maps/provider.ts`: provider-neutral contract, validation, caching, and errors
+- `src/lib/maps/providers/...`: selected provider implementation
 - `src/lib/schema.ts`: dropdown migration and measured supporting indexes
 - `src/app/(app)/entities.module.css`: split shared transaction styles into a dedicated module as the primitives land
 
@@ -199,6 +219,8 @@ Prefer native platform features and the existing React/Next.js/CSS stack. Add a 
 - Convert the mileage ledger and mobile route-first form.
 - Move the mileage reimbursement rate from the transaction screen into Settings.
 - Add favorite route management and recent-route reuse.
+- Complete the provider preflight, add the server-side maps adapter and Settings configuration, then implement address autocomplete and automatic driving-distance calculation with manual fallback.
+- Migrate mileage persistence to retain calculation provenance without rewriting existing entries.
 
 ### Phase 5: Dropdowns & defaults
 
@@ -225,12 +247,15 @@ Prefer native platform features and the existing React/Next.js/CSS stack. Add a 
 - Delete confirmations name the affected record and no deletion occurs from a single accidental tap.
 - Settings users can add, rename, reorder, default, deactivate, reactivate, and safely replace supported dropdown options.
 - Deactivated or renamed options do not erase or mislabel historical transactions.
+- Entering valid start and end addresses can calculate driving mileage without exposing provider credentials to the browser.
+- Users can inspect, recalculate, choose an alternate returned route, or manually override calculated mileage before saving.
+- Maps outages, unavailable routes, missing configuration, and quota errors never prevent manual mileage entry.
+- Saved mileage retains its value and calculation provenance even if the route or maps provider later changes.
 - Filtered totals equal the records returned by the same filter contract.
 - Automated tests cover query validation, pagination boundaries, CRUD, dropdown lifecycle, historical option behavior, dirty-form protection, and key accessibility interactions.
 
 ## Explicit non-goals for this redesign
 
-- Automatic mileage calculation from a maps provider
 - OCR or automatic categorization of receipts
 - Multi-user permissions and approval workflows
 - Spreadsheet-style inline editing across many rows
