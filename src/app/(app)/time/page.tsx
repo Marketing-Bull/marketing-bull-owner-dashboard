@@ -246,7 +246,7 @@ function TimeForm({
         onSubmit(values, submitter?.value === "another");
       }}
     >
-      <label className={styles.sheetField}>
+      <label className={`${styles.sheetField} ${styles.spanAll}`}>
         <span className={styles.fieldLabel}>Date</span>
         <input className={styles.input} type="date" value={values.date} required onChange={(event) => setValues((current) => ({ ...current, date: event.target.value }))} />
       </label>
