@@ -4,16 +4,20 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import {
   AlertTriangle,
   ArrowUpRight,
+  CalendarDays,
   Check,
   ChevronDown,
   ChevronUp,
   Clock,
   ExternalLink,
   Grip,
+  ListTodo,
   LoaderCircle,
   Plus,
   RefreshCw,
-  ShieldAlert
+  ShieldAlert,
+  Target,
+  Timer
 } from "lucide-react";
 import styles from "./owner-dashboard.module.css";
 import { buildDayColumns, dayKey } from "@/lib/calendar-days";
@@ -345,6 +349,7 @@ export function OwnerDashboard({ version }: { version: string }) {
   // them straight back and report "Saved" before the user edited anything.
   const savedSnapshotRef = useRef<string | null>(null);
   const calendarWidgetRef = useRef<HTMLDivElement | null>(null);
+  const primaryOutcomeRef = useRef<HTMLInputElement | null>(null);
 
   async function fetchDashboardState() {
     setStateError(null);
@@ -599,6 +604,15 @@ export function OwnerDashboard({ version }: { version: string }) {
     window.setTimeout(() => {
       calendarWidgetRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 0);
+  }
+
+  function focusPrimaryOutcome() {
+    primaryOutcomeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    primaryOutcomeRef.current?.focus();
+  }
+
+  function scrollToWidget(widgetId: WidgetId) {
+    document.getElementById(`widget-${widgetId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function refreshAll() {
@@ -1334,6 +1348,7 @@ export function OwnerDashboard({ version }: { version: string }) {
             <label className={styles.commandPrimaryField}>
               <span className={styles.commandFieldLabel}>Primary outcome</span>
               <input
+                ref={primaryOutcomeRef}
                 className={styles.commandPrimaryInput}
                 value={manual.hyperfocus.target}
                 placeholder="What must be true by the end of today?"
@@ -1460,6 +1475,25 @@ export function OwnerDashboard({ version }: { version: string }) {
               Open full calendar <ArrowUpRight size={14} />
             </button>
           </aside>
+        </section>
+
+        <section className={styles.quickActionDeck} aria-label="Quick actions">
+          <button type="button" className={`${styles.quickAction} ${styles.quickActionPrimary}`} onClick={focusPrimaryOutcome}>
+            <span className={styles.quickActionIcon}><Target size={17} /></span>
+            <span className={styles.quickActionText}><strong>Focus now</strong><small>Return to the outcome</small></span>
+          </button>
+          <button type="button" className={styles.quickAction} onClick={() => scrollToWidget("upNext")}>
+            <span className={styles.quickActionIcon}><ListTodo size={17} /></span>
+            <span className={styles.quickActionText}><strong>{openTasks} open tasks</strong><small>Clear the next task</small></span>
+          </button>
+          <button type="button" className={styles.quickAction} onClick={openFullCalendar}>
+            <span className={styles.quickActionIcon}><CalendarDays size={17} /></span>
+            <span className={styles.quickActionText}><strong>{todayEvents.length} on the agenda</strong><small>Open full calendar</small></span>
+          </button>
+          <a className={styles.quickAction} href="/time">
+            <span className={styles.quickActionIcon}><Timer size={17} /></span>
+            <span className={styles.quickActionText}><strong>{Math.round(weekHours * 10) / 10}h tracked</strong><small>Log or review time</small></span>
+          </a>
         </section>
 
         <div className={styles.kpiStrip}>
@@ -1694,6 +1728,7 @@ export function OwnerDashboard({ version }: { version: string }) {
           {widgetOrder.map((widgetId) => (
             <div
               key={widgetId}
+              id={`widget-${widgetId}`}
               className={`${styles.widgetSlot} ${widgetLayoutClasses[widgetId]} ${draggingWidget === widgetId ? styles.widgetDragging : ""}`}
               ref={widgetId === "calendar" ? calendarWidgetRef : undefined}
               draggable

@@ -34,6 +34,7 @@ import {
   X
 } from "lucide-react";
 import styles from "./app-shell.module.css";
+import { ThemeSwitcher } from "./theme-switcher";
 
 type NavItem = {
   href: string;
@@ -132,6 +133,10 @@ export function AppShell({ version, children }: { version: string; children: Rea
         </div>
       ))}
 
+      <div className={styles.themeArea}>
+        <ThemeSwitcher />
+      </div>
+
       <div className={styles.footer}>
         <span>{version}</span>
       </div>
@@ -151,6 +156,7 @@ export function AppShell({ version, children }: { version: string; children: Rea
           {open ? <X size={17} /> : <Menu size={17} />}
         </button>
         <span className={styles.topbarTitle}>Owner Dashboard</span>
+        <ThemeSwitcher compact />
       </div>
 
       {open ? (

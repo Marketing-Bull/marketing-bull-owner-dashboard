@@ -1666,3 +1666,490 @@
     grid-column: auto;
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Theme-ready widget redesign                                                 */
+/* -------------------------------------------------------------------------- */
+
+.quickActionDeck {
+  display: grid;
+  grid-template-columns: 1.15fr repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
+}
+
+.quickAction {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: 0 12px 28px -25px var(--shadow-color);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 150ms ease, border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+.quickAction:hover {
+  transform: translateY(-2px);
+  border-color: var(--line-strong);
+  background: var(--panel-strong);
+  box-shadow: 0 18px 34px -26px var(--shadow-color);
+}
+
+.quickAction:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.quickActionPrimary {
+  color: var(--accent-contrast);
+  border-color: transparent;
+  background: linear-gradient(140deg, var(--quick-action), var(--accent-strong));
+}
+
+.quickActionPrimary:hover {
+  color: var(--accent-contrast);
+  border-color: transparent;
+  background: linear-gradient(140deg, var(--quick-action), var(--accent));
+}
+
+.quickActionIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.quickActionPrimary .quickActionIcon {
+  color: var(--accent-contrast);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.quickActionText {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.quickActionText strong,
+.quickActionText small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quickActionText strong {
+  font-size: 12px;
+  line-height: 1.1;
+}
+
+.quickActionText small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.quickActionPrimary .quickActionText small {
+  color: var(--quick-action-muted);
+}
+
+.kpiStrip {
+  gap: 10px;
+  margin-bottom: 26px;
+}
+
+.kpi {
+  min-height: 96px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 16px 30px -30px var(--shadow-color);
+}
+
+.kpi:first-child {
+  color: var(--accent-contrast);
+  background: linear-gradient(145deg, var(--quick-action), var(--accent-strong));
+}
+
+.kpi:first-child .kpiLabel,
+.kpi:first-child .kpiHint {
+  color: var(--quick-action-muted);
+}
+
+.kpi:first-child::after {
+  border-color: color-mix(in srgb, var(--accent-contrast) 22%, transparent);
+}
+
+.workspaceHeader {
+  align-items: end;
+  margin-top: 4px;
+}
+
+.workspaceHint {
+  max-width: 370px;
+}
+
+.workspaceGrid {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-flow: dense;
+  gap: 12px;
+}
+
+.widgetSlot {
+  grid-column: span 3;
+}
+
+.widgetMatrix {
+  grid-column: span 7;
+}
+
+.widgetUpNext,
+.widgetCalendar {
+  grid-column: span 5;
+}
+
+.widgetCollections,
+.widgetGoals,
+.widgetCalls {
+  grid-column: span 4;
+}
+
+.widgetMetric,
+.widgetImportant,
+.widgetSnapshot {
+  grid-column: span 3;
+}
+
+.widgetMatrix .card,
+.widgetUpNext .card {
+  min-height: 100%;
+}
+
+.card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  background:
+    linear-gradient(135deg, var(--widget-rim), transparent 42%),
+    var(--panel);
+  box-shadow: 0 18px 38px -34px var(--shadow-color);
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.card:hover {
+  border-color: var(--line-strong);
+  box-shadow: 0 22px 40px -34px var(--shadow-color);
+}
+
+.cardHeader {
+  position: relative;
+  align-items: center;
+  padding: 13px 14px 12px 18px;
+  border-bottom-color: var(--line);
+  background: color-mix(in srgb, var(--panel-strong) 55%, transparent);
+}
+
+.cardHeader::before {
+  position: absolute;
+  left: 0;
+  top: 13px;
+  bottom: 13px;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+  background: var(--accent);
+  content: "";
+}
+
+.widgetUpNext .cardHeader::before {
+  background: var(--warning);
+}
+
+.widgetCalendar .cardHeader::before {
+  background: #4b67c8;
+}
+
+.widgetMetric .cardHeader::before {
+  background: var(--accent-strong);
+}
+
+.cardBody {
+  padding: 13px 14px 15px;
+}
+
+.cardTitle {
+  font-size: 14px;
+  font-weight: 760;
+  letter-spacing: -0.02em;
+}
+
+.cardActions {
+  gap: 6px;
+}
+
+.collapseButton,
+.dragHandle {
+  border-color: var(--line);
+  color: var(--muted);
+  background: var(--panel-soft);
+}
+
+.priorityGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.priorityCell {
+  padding: 10px;
+  border-color: var(--line);
+  background: var(--panel-soft);
+}
+
+.priorityHead {
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.priorityKey {
+  max-width: calc(100% - 20px);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  white-space: normal;
+}
+
+.priorityCell .helpText {
+  min-height: 27px;
+  margin: 6px 0 8px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.priorityCell .chip {
+  padding: 8px;
+  border-color: var(--line);
+  background: var(--panel-strong);
+}
+
+.chip,
+.miniPanel,
+.taskRow,
+.goalRow,
+.openIdea,
+.dayColumn,
+.callColumn,
+.eventCard,
+.callItem {
+  border-color: var(--line);
+  background: var(--panel-soft);
+}
+
+.chip:hover,
+.eventCardButton:hover,
+.taskRow:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-strong);
+}
+
+.widgetUpNext .taskRow {
+  position: relative;
+  padding: 10px 11px 10px 14px;
+}
+
+.widgetUpNext .taskRow::before {
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+  background: var(--warning);
+  content: "";
+}
+
+.taskContent {
+  min-width: 0;
+}
+
+.eventCard {
+  padding: 10px;
+}
+
+.eventCardButton:focus-visible,
+.taskRow:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.metric {
+  color: var(--accent-strong);
+}
+
+.highlight,
+.focusPanel {
+  border-color: var(--line);
+  background: var(--accent-soft);
+}
+
+.widgetMetric .cardBody {
+  display: grid;
+  gap: 10px;
+}
+
+.widgetCalls .button {
+  border-color: var(--line-strong);
+}
+
+@media (max-width: 1320px) {
+  .quickActionDeck {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .widgetMatrix {
+    grid-column: span 7;
+  }
+
+  .widgetUpNext,
+  .widgetCalendar {
+    grid-column: span 5;
+  }
+
+  .widgetCollections,
+  .widgetGoals,
+  .widgetCalls {
+    grid-column: span 4;
+  }
+
+  .widgetMetric,
+  .widgetImportant,
+  .widgetSnapshot {
+    grid-column: span 3;
+  }
+}
+
+@media (max-width: 1180px) {
+  .widgetMatrix,
+  .widgetUpNext,
+  .widgetCalendar {
+    grid-column: span 6;
+  }
+
+  .widgetCollections,
+  .widgetGoals,
+  .widgetCalls {
+    grid-column: span 3;
+  }
+
+  .widgetMetric,
+  .widgetImportant,
+  .widgetSnapshot {
+    grid-column: span 3;
+  }
+
+  .priorityGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 860px) {
+  .quickActionDeck {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .quickAction {
+    min-height: 64px;
+    padding: 10px;
+    gap: 8px;
+    border-radius: 13px;
+  }
+
+  .quickActionIcon {
+    width: 31px;
+    height: 31px;
+  }
+
+  .quickActionText strong {
+    font-size: 11px;
+  }
+
+  .quickActionText small {
+    font-size: 9px;
+  }
+
+  .workspaceGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .widgetMatrix,
+  .widgetUpNext,
+  .widgetCalendar {
+    grid-column: span 2;
+  }
+
+  .widgetCollections,
+  .widgetGoals,
+  .widgetCalls,
+  .widgetMetric,
+  .widgetImportant,
+  .widgetSnapshot {
+    grid-column: span 1;
+  }
+
+  .widgetCollections,
+  .widgetGoals,
+  .widgetCalls {
+    grid-column: span 2;
+  }
+
+  .cardHeader {
+    padding: 12px 12px 10px 16px;
+  }
+
+  .cardBody {
+    padding: 12px;
+  }
+
+  .priorityGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .priorityCell .helpText {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .quickActionText small {
+    display: none;
+  }
+
+  .quickAction {
+    min-height: 54px;
+  }
+
+  .widgetMetric,
+  .widgetImportant,
+  .widgetSnapshot {
+    grid-column: span 2;
+  }
+
+  .priorityGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .priorityCell {
+    padding: 9px;
+  }
+}
