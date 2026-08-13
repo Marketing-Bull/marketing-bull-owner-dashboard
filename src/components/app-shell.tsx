@@ -5,9 +5,9 @@
  *
  * Structure follows mission-control's layout — a sectioned sidebar with every
  * module reachable in one click, active highlight, meta in the footer — with
- * this dashboard's own visual language. Time, Expenses, and Mileage are live;
- * Calendar remains an honest placeholder rather than hidden, so the shape of
- * the finished app stays visible as each phase lands.
+ * this dashboard's own visual language. Tasks, Time, Expenses, and Mileage are
+ * live; Calendar remains an honest placeholder rather than hidden, so the shape
+ * of the finished app stays visible as each phase lands.
  *
  * On desktop the sidebar is fixed; under 860px it becomes a top bar with a
  * drawer. The content region deliberately adds no padding or width limits —
@@ -59,6 +59,7 @@ const SECTIONS: NavSection[] = [
   {
     label: "Track",
     items: [
+      { href: "/tasks", label: "Tasks", icon: <ListTodo size={16} /> },
       { href: "/time", label: "Time", icon: <Clock3 size={16} /> },
       { href: "/expenses", label: "Expenses", icon: <Receipt size={16} /> },
       { href: "/mileage", label: "Mileage", icon: <Car size={16} /> },

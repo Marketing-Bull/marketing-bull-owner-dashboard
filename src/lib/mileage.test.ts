@@ -63,6 +63,35 @@ describe("mileage", () => {
     expect(second.cached).toBe(true); expect(calls).toBe(beforeCache + 2);
   });
 
+  it("falls back to a single route when the provider rejects alternatives, and reports why it failed", async () => {
+    const db = freshDb(); setStoredMapsApiKey(db, "test-key");
+    const bodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const value = String(url);
+      if (value.includes("geocode")) return new Response(JSON.stringify({ features: [{ id: value.includes("Start") ? "start" : "end", geometry: { coordinates: value.includes("Start") ? [-80.1, 25.7] : [-81.5, 28.5] }, properties: { label: value.includes("Start") ? "Start Place" : "End Place" } }] }), { status: 200 });
+      const body = String(init?.body ?? ""); bodies.push(body);
+      if (body.includes("alternative_routes")) {
+        return new Response(JSON.stringify({ error: { code: 2004, message: "Request parameters exceed the server configuration limits. The approximated route distance must not be greater than 100000.0 meters." } }), { status: 400 });
+      }
+      return new Response(JSON.stringify({ routes: [{ summary: { distance: 160934.4, duration: 7200 } }] }), { status: 200 });
+    }));
+
+    const result = await calculateDrivingRoutes(db, "Start", "End");
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0].miles).toBe(100);
+    expect(bodies.some((body) => body.includes("alternative_routes"))).toBe(true);
+    expect(bodies.some((body) => !body.includes("alternative_routes"))).toBe(true);
+  });
+
+  it("surfaces the provider's own error text instead of a bare status code", async () => {
+    const db = freshDb(); setStoredMapsApiKey(db, "test-key");
+    vi.stubGlobal("fetch", vi.fn(async (url: string | URL) => {
+      if (String(url).includes("geocode")) return new Response(JSON.stringify({ features: [{ id: "a", geometry: { coordinates: [-80.1, 25.7] }, properties: { label: "Somewhere" } }] }), { status: 200 });
+      return new Response(JSON.stringify({ error: { code: 2010, message: "Could not find routable point within a radius of 350.0 meters of specified coordinate 1." } }), { status: 400 });
+    }));
+    await expect(calculateDrivingRoutes(db, "Start", "End")).rejects.toThrow(/routable point/i);
+  });
+
   it("inherits project ownership and rejects impossible distances and mismatches", () => {
     const db = freshDb();
     const owner = createClient(db, { name: "Owner" });

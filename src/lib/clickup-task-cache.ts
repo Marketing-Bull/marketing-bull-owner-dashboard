@@ -299,10 +299,12 @@ export function deleteCachedClickUpTask(db: DatabaseSync, taskId: string): void 
 export async function ensureClickUpTasksFresh(
   db: DatabaseSync,
   fetchTasks: () => Promise<ClickUpTaskCacheInput[]>,
-  now: Date = new Date()
+  now: Date = new Date(),
+  /** `force` refreshes a cache that is still fresh — an explicit Sync now. */
+  options: { force?: boolean } = {}
 ): Promise<ClickUpTaskSyncResult> {
   const before = getClickUpTaskSyncRow(db);
-  if (!isClickUpTaskSyncStale(before, now)) {
+  if (!options.force && !isClickUpTaskSyncStale(before, now)) {
     return {
       tasks: listCachedClickUpTasks(db),
       sync: syncRowToInfo(before, false, now),
