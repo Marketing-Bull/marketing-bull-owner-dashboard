@@ -12,6 +12,7 @@ import {
   listCachedClickUpTasks,
   replaceCachedClickUpTasks
 } from "@/lib/clickup-task-cache";
+import { createClient, createProject } from "@/lib/entities";
 import { runMigrations } from "@/lib/migrations";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
 
@@ -55,7 +56,13 @@ describe("ClickUp task cache", () => {
     expect(isClickUpTaskSyncStale(null, syncedAt)).toBe(true);
     replaceCachedClickUpTasks(db, [task], syncedAt);
 
-    expect(listCachedClickUpTasks(db)).toEqual([task]);
+    expect(listCachedClickUpTasks(db)).toHaveLength(1);
+    expect(listCachedClickUpTasks(db)[0]).toMatchObject({
+      ...task,
+      clientId: null,
+      projectId: null,
+      associationSource: "none"
+    });
     expect(getClickUpTaskSyncInfo(db, syncedAt)).toEqual({
       lastSyncedAt: "2026-08-13T12:00:00.000Z",
       lastAttemptedAt: "2026-08-13T12:00:00.000Z",
@@ -132,5 +139,35 @@ describe("ClickUp task cache", () => {
     deleteCachedClickUpTask(db, task.id);
 
     expect(listCachedClickUpTasks(db)).toEqual([]);
+  });
+
+  it("reassociates cached tasks when matching local projects are added later", () => {
+    const db = freshDb();
+    replaceCachedClickUpTasks(
+      db,
+      [
+        {
+          ...task,
+          list: { id: "list-1", name: "Launch Website" }
+        }
+      ],
+      new Date("2026-08-13T12:00:00.000Z")
+    );
+    expect(listCachedClickUpTasks(db)[0]).toMatchObject({
+      clientId: null,
+      projectId: null,
+      associationSource: "none"
+    });
+
+    const client = createClient(db, { name: "Better Wellness Clinic" });
+    const project = createProject(db, { name: "Launch Website", clientId: client.id });
+
+    expect(listCachedClickUpTasks(db)[0]).toMatchObject({
+      clientId: client.id,
+      clientName: client.name,
+      projectId: project.id,
+      projectName: project.name,
+      associationSource: "project-list"
+    });
   });
 });

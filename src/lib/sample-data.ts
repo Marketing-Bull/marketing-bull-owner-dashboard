@@ -79,6 +79,10 @@ export const SAMPLE_DASHBOARD_DATA: DashboardData = {
     }
   ],
   hours: {
+    day: [
+      { label: "Owner Dashboard", hours: 2.5 },
+      { label: "Admin", hours: 0.5 }
+    ],
     week: [
       { label: "Owner Dashboard", hours: 6.5 },
       { label: "RTT Minisite", hours: 4 },

@@ -205,5 +205,144 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
         );
       `);
     }
+  },
+  {
+    // Consolidation phase 4: expenses, recurring expense definitions,
+    // accounting reference data, and mileage become app-owned records.
+    // The schema keeps Mission Control provenance and its richer accounting
+    // fields so the later reports phase is additive rather than a re-import.
+    id: "006-expenses-mileage",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE chart_accounts (
+          account_code TEXT PRIMARY KEY,
+          mc_id INTEGER UNIQUE,
+          category TEXT NOT NULL,
+          schedule_c_line TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '',
+          notes TEXT NOT NULL DEFAULT '',
+          is_income INTEGER NOT NULL DEFAULT 0 CHECK (is_income IN (0, 1)),
+          account_type TEXT NOT NULL DEFAULT 'expense',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE expense_category_accounts (
+          category TEXT PRIMARY KEY,
+          account_code TEXT NOT NULL REFERENCES chart_accounts(account_code),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE recurring_expenses (
+          id TEXT PRIMARY KEY,
+          mc_id INTEGER UNIQUE,
+          client_id TEXT REFERENCES clients(id),
+          project_id TEXT REFERENCES projects(id),
+          description TEXT NOT NULL,
+          vendor TEXT NOT NULL DEFAULT '',
+          amount REAL NOT NULL CHECK (amount >= 0),
+          category TEXT NOT NULL,
+          company TEXT NOT NULL DEFAULT '',
+          frequency TEXT NOT NULL CHECK (frequency IN ('weekly', 'monthly', 'quarterly', 'yearly')),
+          day_of_month INTEGER CHECK (day_of_month IS NULL OR (day_of_month >= 1 AND day_of_month <= 31)),
+          start_date TEXT NOT NULL,
+          end_date TEXT,
+          status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'cancelled')),
+          notes TEXT NOT NULL DEFAULT '',
+          payment_method TEXT NOT NULL DEFAULT '',
+          account_code TEXT REFERENCES chart_accounts(account_code),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE expenses (
+          id TEXT PRIMARY KEY,
+          mc_id INTEGER UNIQUE,
+          client_id TEXT REFERENCES clients(id),
+          project_id TEXT REFERENCES projects(id),
+          recurring_expense_id TEXT REFERENCES recurring_expenses(id) ON DELETE SET NULL,
+          date TEXT NOT NULL,
+          amount REAL NOT NULL CHECK (amount >= 0),
+          kind TEXT NOT NULL DEFAULT 'expense' CHECK (kind IN ('expense', 'income')),
+          category TEXT NOT NULL,
+          company TEXT NOT NULL DEFAULT '',
+          vendor TEXT NOT NULL DEFAULT '',
+          details TEXT NOT NULL DEFAULT '',
+          account_code TEXT REFERENCES chart_accounts(account_code),
+          billable INTEGER NOT NULL DEFAULT 0 CHECK (billable IN (0, 1)),
+          reimbursable INTEGER NOT NULL DEFAULT 0 CHECK (reimbursable IN (0, 1)),
+          recurring TEXT NOT NULL DEFAULT 'none' CHECK (recurring IN ('none', 'weekly', 'monthly', 'quarterly', 'yearly')),
+          recurring_day INTEGER CHECK (recurring_day IS NULL OR (recurring_day >= 1 AND recurring_day <= 31)),
+          payment_method TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '',
+          tags TEXT NOT NULL DEFAULT '',
+          receipt_name TEXT,
+          receipt_path TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE mileage_entries (
+          id TEXT PRIMARY KEY,
+          mc_id INTEGER UNIQUE,
+          client_id TEXT REFERENCES clients(id),
+          project_id TEXT REFERENCES projects(id),
+          trip_name TEXT NOT NULL DEFAULT '',
+          date TEXT NOT NULL,
+          start_address TEXT NOT NULL DEFAULT '',
+          end_address TEXT NOT NULL DEFAULT '',
+          purpose TEXT NOT NULL DEFAULT '',
+          miles REAL NOT NULL CHECK (miles > 0),
+          round_trip INTEGER NOT NULL DEFAULT 0 CHECK (round_trip IN (0, 1)),
+          total_miles REAL NOT NULL CHECK (total_miles > 0),
+          billable INTEGER NOT NULL DEFAULT 0 CHECK (billable IN (0, 1)),
+          notes TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX idx_expenses_date ON expenses(date);
+        CREATE INDEX idx_expenses_client_id ON expenses(client_id);
+        CREATE INDEX idx_expenses_project_id ON expenses(project_id);
+        CREATE INDEX idx_expenses_kind ON expenses(kind);
+        CREATE INDEX idx_expenses_category ON expenses(category);
+        CREATE INDEX idx_recurring_expenses_status ON recurring_expenses(status);
+        CREATE INDEX idx_mileage_entries_date ON mileage_entries(date);
+        CREATE INDEX idx_mileage_entries_client_id ON mileage_entries(client_id);
+        CREATE INDEX idx_mileage_entries_project_id ON mileage_entries(project_id);
+
+        INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+        VALUES ('mileage.rate', '0.67', CURRENT_TIMESTAMP);
+      `);
+    }
+  },
+  {
+    // ClickUp tasks are associated automatically on each cache refresh. Source
+    // hierarchy is stored for auditability; local entity ids are nullable
+    // because an unmatched task must remain visible rather than be guessed.
+    id: "007-clickup-task-associations",
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE clickup_tasks ADD COLUMN folder_id TEXT;
+        ALTER TABLE clickup_tasks ADD COLUMN folder_name TEXT;
+        ALTER TABLE clickup_tasks ADD COLUMN space_id TEXT;
+        ALTER TABLE clickup_tasks ADD COLUMN space_name TEXT;
+        ALTER TABLE clickup_tasks ADD COLUMN client_id TEXT REFERENCES clients(id);
+        ALTER TABLE clickup_tasks ADD COLUMN project_id TEXT REFERENCES projects(id);
+        ALTER TABLE clickup_tasks ADD COLUMN association_source TEXT NOT NULL DEFAULT 'none';
+
+        CREATE INDEX idx_clickup_tasks_space_id ON clickup_tasks(space_id);
+        CREATE INDEX idx_clickup_tasks_client_id ON clickup_tasks(client_id);
+        CREATE INDEX idx_clickup_tasks_project_id ON clickup_tasks(project_id);
+      `);
+    }
+  },
+  {
+    // Widget removal is reversible: visibility is a preference, not deletion.
+    id: "008-widget-visibility",
+    up: (db) => {
+      db.exec("ALTER TABLE dashboard_state ADD COLUMN hidden_widgets_json TEXT NOT NULL DEFAULT '[]'");
+    }
   }
 ];

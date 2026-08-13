@@ -403,7 +403,7 @@
         <p>The three blocked repos were attached and read from a session rooted at the canonical <code>Marketing-Bull</code> path, exactly as prescribed. The doc's three open questions now have answers:</p>
         <ul>
           <li><strong><code>amb-mission-control</code> is not a field list — it is a working predecessor.</strong> A live v1.1.0 app (32 tables) that already does most of what §05 marks <em>Build</em>: clients CRM, projects, time, mileage, expenses — plus subsystems this plan never scoped: double-entry accounting with Schedule-C chart of accounts and P&amp;L / Balance Sheet / Trial Balance reports, CallRail call tracking, its own tasks/kanban, its own calendar events table, file workspace, notifications. Its schema is richer than §04 in specific places — diffed below — and its live database holds real rows that must be imported whatever else is decided.</li>
-          <li><strong><code>client-mileage-keeper-pro</code> settles Mileage the other way:</strong> it is a Lovable UI mockup with hardcoded sample data and no persistence, so Mileage is <em>build from Recoup's model</em>, not <em>port</em>. The doc's earlier caution about over-inferring from the repo name was warranted. The good mileage UX (Maps autocomplete, auto-distance) turned out to live in mission-control, per its README — that is the UX reference at build time. Recoup's <code>round_trip</code>/<code>total_miles</code> doubling stays; mission-control's mileage table has no round-trip concept at all.</li>
+          <li><strong><code>client-mileage-keeper-pro</code> settles Mileage the other way:</strong> it is a Lovable UI mockup with hardcoded sample data and no persistence, so Mileage is <em>build from Recoup's model</em>, not <em>port</em>. The doc's earlier caution about over-inferring from the repo name was warranted. The good mileage UX (Maps autocomplete, auto-distance) lives in mission-control, per its README. The live database had since added <code>is_round_trip</code>/<code>total_miles</code>, matching Recoup's doubling rule.</li>
           <li><strong><code>amb-auto-scheduler</code> unblocks Calendar:</strong> it is a dormant scaffold (one migration, one OAuth function, no engine), and by design it writes task blocks to a dedicated &ldquo;AMB Tasks&rdquo; Google calendar, never to primary. So the Month / Week / Work Week work in §05 proceeds as view-only against primary; if the scheduler ever ships, its calendar becomes a second read source, not a design constraint. It also carries its own Supabase <code>tasks</code> table — a third place tasks could live, noted under D4.</li>
         </ul>
         <div class="scroll">
@@ -458,7 +458,7 @@
     <div class="prose">
       <p>The owner dashboard is a <strong>read-only viewer</strong>. What you are asking for is a <strong>system of record</strong>. That is the whole scope in one sentence, and almost every line item below follows from it.</p>
       <p>Concretely: today "Clients" and "Projects" are not entities. They are ClickUp tasks pulled from two hardcoded list IDs and rendered as chips — the type is <code>{ id, title, subtitle, status, href }</code>, with no client→project relationship, no rates, no contacts, and no way to create one. The only thing the app owns is a single-row SQLite table of free-text fields plus a phone-call list.</p>
-      <p>At the time of the original review, time entries, expenses and mileage did not exist in any form. Phase 3 has since made time entries local writable records and moved "Hours by Project" onto them. Expenses and mileage are still absent.</p>
+      <p>At the time of the original review, time entries, expenses and mileage did not exist in any form. Phases 3–4 have since made all three local writable records: time powers "Hours by Project"; expenses carry recurring and accounting references; mileage computes round trips and reimbursement locally.</p>
       <p>So this is not "add three forms". It is introducing a relational datastore, write paths with validation, and CRUD surfaces, into an app that has never written a domain record. The good news is that Recoup has already solved the modelling twice, and both solutions agree — and Phase 00 found it solved a third time, live, in mission-control, which is both a field source and the holder of the real data any consolidation must import.</p>
     </div>
   </section>
@@ -513,23 +513,26 @@
 
 <span class="c">-- Expenses</span>
 <span class="k">CREATE TABLE</span> expenses (
-  id TEXT PRIMARY KEY, client_id TEXT, project_id TEXT,
+  id TEXT PRIMARY KEY, mc_id INTEGER UNIQUE,
+  client_id TEXT, project_id TEXT, recurring_expense_id TEXT,
   date TEXT NOT NULL, amount REAL DEFAULT 0,
-  category TEXT DEFAULT 'other',    <span class="c">-- software|meals|travel|advertising|</span>
-                                    <span class="c">-- office|contractors|other</span>
-  vendor TEXT DEFAULT '', details TEXT DEFAULT '',
-  billable INTEGER DEFAULT 0,
-  recurring TEXT DEFAULT 'none',    <span class="c">-- none|weekly|monthly|yearly</span>
-  receipt_url TEXT, created_at TEXT NOT NULL);
+  kind TEXT DEFAULT 'expense',      <span class="c">-- expense|income</span>
+  category TEXT NOT NULL, company TEXT DEFAULT '',
+  vendor TEXT DEFAULT '', details TEXT DEFAULT '', account_code TEXT,
+  billable INTEGER DEFAULT 0, reimbursable INTEGER DEFAULT 0,
+  recurring TEXT DEFAULT 'none', recurring_day INTEGER,
+  receipt_path TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 
 <span class="c">-- Mileage</span>
 <span class="k">CREATE TABLE</span> mileage_entries (
-  id TEXT PRIMARY KEY, client_id TEXT, project_id TEXT,
+  id TEXT PRIMARY KEY, mc_id INTEGER UNIQUE,
+  client_id TEXT, project_id TEXT, trip_name TEXT DEFAULT '',
   date TEXT NOT NULL, start_address TEXT DEFAULT '',
   end_address TEXT DEFAULT '', purpose TEXT DEFAULT '',
   miles REAL DEFAULT 0, round_trip INTEGER DEFAULT 0,
   total_miles REAL DEFAULT 0,       <span class="c">-- miles x2 when round_trip</span>
-  billable INTEGER DEFAULT 0, created_at TEXT NOT NULL);
+  billable INTEGER DEFAULT 0, notes TEXT DEFAULT '',
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 
 <span class="c">-- Settings (mileage reimbursement rate)</span>
 <span class="k">CREATE TABLE</span> settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -580,15 +583,15 @@
           </tr>
           <tr>
             <td class="mono">Expenses</td>
-            <td>Nothing.</td>
-            <td>Full CRUD, 7 categories, recurring + annualization, vendor, receipt upload.</td>
-            <td><span class="chip build">Build</span></td>
+            <td>Local SQLite records; full CRUD at <code>/expenses</code>, including recurring definitions and receipt attachments.</td>
+            <td>Done: accounting references carried, annualization live, and all 708 source rows preserved; the 84 Revenue rows are classified as income.</td>
+            <td><span class="chip keep">Done</span></td>
           </tr>
           <tr>
             <td class="mono">Mileage</td>
-            <td>Nothing.</td>
-            <td>Full CRUD, round-trip doubling, recent-trip picker, rate from settings. Build from Recoup's model — <code>client-mileage-keeper-pro</code> turned out to be a mockup; mission-control's entry UX (Maps autocomplete, auto-distance) is the reference.</td>
-            <td><span class="chip build">Build</span></td>
+            <td>Local SQLite records; full CRUD at <code>/mileage</code>.</td>
+            <td>Done: round-trip doubling, recent-trip picker, and editable rate. Address autocomplete and auto-distance remain a later Maps integration.</td>
+            <td><span class="chip keep">Done</span></td>
           </tr>
           <tr>
             <td class="mono">Tasks</td>
@@ -661,7 +664,7 @@
     <div class="phase"><div class="n">01</div><div><h4>Foundation — <span class="chip keep">Done 2026-08-13</span></h4><p>Merged as PR&nbsp;#12: ordered migrations recorded in <code>schema_migrations</code>, locked-by-default auth (503 + setup screen; running open now requires <code>OWNER_DASHBOARD_ALLOW_UNPROTECTED=1</code>), daily <code>VACUUM INTO</code> backups pruned to 14, and a configurable <code>OWNER_DASHBOARD_DB_PATH</code>. Deploy note: the live host locks until its token is set.</p></div></div>
     <div class="phase"><div class="n">02</div><div><h4>Clients and Projects as real entities — <span class="chip keep">Done 2026-08-13</span></h4><p>Merged as PR&nbsp;#13. Migration <code>002</code> (Recoup's model + the adopted MC billing fields + <code>mc_id</code> provenance), archive-only CRUD at <code>/clients</code> and <code>/projects</code>, chip widgets re-pointed at local data, ClickUp list fetches and their hardcoded ids removed. The mission-control import ran against the live file: 14 clients + 23 projects, zero warnings, idempotent re-run converges. Statuses normalized (4 active / 5 prospect / 5 on_hold); MC's 0-money defaults imported as null.</p></div></div>
     <div class="phase"><div class="n">03</div><div><h4>Time entry — <span class="chip keep">Done 2026-08-13</span></h4><p>Migration <code>003</code>, hours-first CRUD at <code>/time</code>, frozen rate resolution, recent client/project prefill, nullable start/end compatibility, local dashboard rollups, and idempotent MC import are implemented and tested. The verified live file imported all 98 rows with zero skips; <code>mc_id=122</code>'s invalid <code>10:30</code> date was repaired to <code>2026-03-19</code> from <code>created_at</code>. The idempotency rerun updated the same 98 rows and inserted none.</p></div></div>
-    <div class="phase"><div class="n">04</div><div><h4>Expenses and Mileage</h4><p>Structurally the same shape as time entry; fast once phase 3 has established the pattern.</p></div></div>
+    <div class="phase"><div class="n">04</div><div><h4>Expenses and Mileage — <span class="chip keep">Done 2026-08-13</span></h4><p>Migration <code>006</code>, full CRUD, receipts, recurring annualization, accounting references, computed round trips, recent routes, and mileage-rate settings are implemented and tested. The verified source imported 708 financial records (624 expense + 84 income), 13 recurring definitions, 30 chart accounts, 24 mappings, and 4 trips with zero skips. The inconsistent round-trip row was repaired from 11 to 22 miles; the idempotency rerun updated every source row and inserted none.</p></div></div>
     <div class="phase"><div class="n">05</div><div><h4>Calendar views and Goals relabel</h4><p>Independent of everything above. Can be pulled forward if you want a quick win.</p></div></div>
     <div class="phase"><div class="n">06</div><div><h4>Eisenhower prioritisation and derived MRR</h4><p>Both need the data from phases 2–4 to exist before they mean anything.</p></div></div>
   </section>
@@ -703,7 +706,7 @@
           <li><strong>Mission-control is dormant, not in daily use.</strong> Last time entry 2026-03-19, last expense 2026-03-16, last client edit 2026-03-16, last task touch 2026-04-15 — quiet for ~5 months. That further de-risks D5's absorb-and-retire, and mostly dissolves the D4 tension: MC's kanban stopped in April while the dashboard reads ClickUp live today. Its 92 open tasks are a one-time review/export, not a migration.</li>
           <li><strong>The import is small; the cleaning rules are the real work.</strong> clients 14 · projects 23 · time entries 98 · expenses 708 (2024-02 → 2026-03) · mileage 4 · recurring-expense definitions 13 · CoA 30 + category→account map 24. Under ~1,500 rows in total.</li>
         </ul>
-        <p>Cleaning rules the import must carry: client statuses need normalising (<code>On Hold</code> / <code>on hold</code> / <code>prospect</code> — note <em>prospect</em> is a pipeline state the client status set must include); one time entry has <code>10:30</code> as its date (Phase 3 repairs it from the row's valid <code>created_at</code> day and emits a warning); one mileage row's <code>total_miles</code> disagrees with its round-trip flag; 84 expense rows carry a <code>Revenue</code> category inside the expenses table and need a human call at import time; categories are 11 free-text values, not the 7-value enum. Live-schema confirmations: mileage <em>does</em> have <code>is_round_trip</code>/<code>total_miles</code> (matching Recoup after all); time entries are all <code>duration_hours</code> with only 13 carrying start/end (D7's shape confirmed); <code>expenses.account_code</code> was never populated — the category→CoA link lives in <code>category_account_map</code>, so D6's "carry codes" imports that mapping rather than per-row codes; recurring is a separate <code>recurring_expenses</code> table (13 definitions, 25 generated rows linked), richer than the flag-on-the-row the plan drafted.</p>
+        <p>Cleaning rules carried by the completed imports: client statuses are normalised; the invalid <code>10:30</code> time-entry date is repaired from <code>created_at</code>; mileage totals are recomputed, correcting the inconsistent round trip from 11 to 22 miles; and the 84 <code>Revenue</code> rows are preserved as income so they never inflate expense totals. Categories remain free text rather than being forced into the original seven-value draft. The category→CoA table is imported alongside all 30 accounts; 584 records without a source mapping remain explicitly unset for later review. Recurring remains a separate table (13 definitions, 25 generated rows linked), preserving the richer live model.</p>
         <p><strong>One number to not trust:</strong> summing MC's client MRR fields gives $3,350 active — the dashboard's hand-typed MRR says $42,500. The client rows were never kept current, so after the import the derived-MRR feature (§05) must not silently replace the typed figure until the client records are brought up to date.</p>
       </div>
     </div>

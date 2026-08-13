@@ -16,6 +16,7 @@ function payload(overrides: Partial<DashboardStatePayload> = {}): DashboardState
     manual: DEFAULT_MANUAL_STATE,
     widgetOrder: [...DEFAULT_WIDGET_ORDER],
     collapsed: [],
+    hiddenWidgets: [],
     ...overrides
   };
 }
@@ -28,6 +29,7 @@ describe("serializeState", () => {
   it("changes when any tracked slice changes", () => {
     const base = serializeState(payload());
     expect(serializeState(payload({ collapsed: ["mrr"] }))).not.toBe(base);
+    expect(serializeState(payload({ hiddenWidgets: ["mrr"] }))).not.toBe(base);
     expect(serializeState(payload({ widgetOrder: ["mrr", ...DEFAULT_WIDGET_ORDER.filter((id) => id !== "mrr")] })))
       .not.toBe(base);
     expect(

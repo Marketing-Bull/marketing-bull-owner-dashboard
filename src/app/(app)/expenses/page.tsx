@@ -1,12 +1,105 @@
-import { PlaceholderScreen } from "@/components/placeholder-screen";
+"use client";
 
-export default function ExpensesPage() {
-  return (
-    <PlaceholderScreen
-      eyebrow="Marketing Bull / Tracking"
-      title="Expenses"
-      phase="Phase 4"
-      description="Expense entry with chart-of-accounts categories, company dimension, recurring definitions, and receipt attachments. The 708 expenses recorded in mission-control (Feb 2024 – Mar 2026) import when this ships, account-code mapping included, so Schedule-C reporting stays possible later."
-    />
-  );
+import { useEffect, useMemo, useState } from "react";
+import { LoaderCircle, Paperclip, Plus, Repeat2, WalletCards } from "lucide-react";
+import styles from "../entities.module.css";
+import type { ChartAccount, Client, Expense, ExpenseFrequency, ExpenseKind, ExpenseRecentDefaults, Project, RecurringExpense, RecurringExpenseStatus } from "@/lib/types";
+
+function redirected(response: Response): boolean {
+  if (response.status !== 401) return false;
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+  return true;
+}
+function todayKey() { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function money(value: number) { return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value); }
+function friendlyDate(value: string) { const d = new Date(`${value}T12:00:00`); return Number.isFinite(d.getTime()) ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(d) : value; }
+
+type ExpenseFormValues = {
+  date: string; amount: string; kind: ExpenseKind; category: string; company: string; vendor: string;
+  clientId: string; projectId: string; accountCode: string; billable: boolean; reimbursable: boolean;
+  recurring: ExpenseFrequency; recurringDay: string; paymentMethod: string; status: string; tags: string; details: string;
+};
+function emptyExpense(defaults: ExpenseRecentDefaults | null): ExpenseFormValues {
+  return { date: todayKey(), amount: "", kind: "expense", category: defaults?.category || "Software",
+    company: defaults?.company || "Marketing Bull", vendor: "", clientId: "", projectId: "",
+    accountCode: defaults?.accountCode || "", billable: false, reimbursable: false, recurring: "none",
+    recurringDay: "", paymentMethod: defaults?.paymentMethod || "", status: "", tags: "", details: "" };
+}
+function expenseToForm(e: Expense): ExpenseFormValues {
+  return { date:e.date, amount:String(e.amount), kind:e.kind, category:e.category, company:e.company, vendor:e.vendor,
+    clientId:e.clientId||"", projectId:e.projectId||"", accountCode:e.accountCode||"", billable:e.billable,
+    reimbursable:e.reimbursable, recurring:e.recurring, recurringDay:e.recurringDay == null ? "" : String(e.recurringDay),
+    paymentMethod:e.paymentMethod, status:e.status, tags:e.tags, details:e.details };
+}
+function expensePayload(v: ExpenseFormValues) { return { ...v, amount:Number(v.amount), clientId:v.clientId||null,
+  projectId:v.projectId||null, accountCode:v.accountCode||null, recurringDay:v.recurringDay ? Number(v.recurringDay) : null } }
+
+function ExpenseForm({ initial, clients, projects, accounts, categories, busy, label, onSubmit, onCancel }:
+  { initial:ExpenseFormValues; clients:Client[]; projects:Project[]; accounts:ChartAccount[]; categories:string[]; busy:boolean; label:string; onSubmit:(v:ExpenseFormValues)=>void; onCancel:()=>void }) {
+  const [v,setV]=useState(initial);
+  const selectableProjects=projects.filter((p)=>!v.clientId||p.clientId===v.clientId||p.id===v.projectId);
+  return <form className={styles.form} onSubmit={(e)=>{e.preventDefault();onSubmit(v)}}>
+    <label className={styles.field}><span className={styles.label}>Date</span><input className={styles.input} type="date" value={v.date} onChange={(e)=>setV({...v,date:e.target.value})} required /></label>
+    <label className={styles.field}><span className={styles.label}>Amount</span><input className={styles.input} type="number" min="0.01" step="0.01" inputMode="decimal" value={v.amount} onChange={(e)=>setV({...v,amount:e.target.value})} required autoFocus /></label>
+    <label className={styles.field}><span className={styles.label}>Type</span><select className={styles.select} value={v.kind} onChange={(e)=>setV({...v,kind:e.target.value as ExpenseKind})}><option value="expense">Expense</option><option value="income">Income</option></select></label>
+    <label className={styles.field}><span className={styles.label}>Category</span><input className={styles.input} list="expense-categories" value={v.category} onChange={(e)=>setV({...v,category:e.target.value})} required /><datalist id="expense-categories">{categories.map((c)=><option key={c} value={c}/>)}</datalist></label>
+    <label className={styles.field}><span className={styles.label}>Company</span><input className={styles.input} value={v.company} onChange={(e)=>setV({...v,company:e.target.value})} /></label>
+    <label className={styles.field}><span className={styles.label}>Vendor</span><input className={styles.input} value={v.vendor} onChange={(e)=>setV({...v,vendor:e.target.value})} /></label>
+    <label className={styles.field}><span className={styles.label}>Client</span><select className={styles.select} value={v.clientId} onChange={(e)=>setV({...v,clientId:e.target.value,projectId:""})}><option value="">Unassigned</option>{clients.map((c)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+    <label className={styles.field}><span className={styles.label}>Project</span><select className={styles.select} value={v.projectId} onChange={(e)=>{const p=projects.find((x)=>x.id===e.target.value);setV({...v,projectId:e.target.value,clientId:p?.clientId||v.clientId})}}><option value="">No project</option>{selectableProjects.map((p)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+    <label className={styles.field}><span className={styles.label}>Account code</span><select className={styles.select} value={v.accountCode} onChange={(e)=>setV({...v,accountCode:e.target.value})}><option value="">Unmapped</option>{accounts.map((a)=><option key={a.accountCode} value={a.accountCode}>{a.accountCode} · {a.category}</option>)}</select></label>
+    <label className={styles.field}><span className={styles.label}>Recurring</span><select className={styles.select} value={v.recurring} onChange={(e)=>setV({...v,recurring:e.target.value as ExpenseFrequency})}><option value="none">One-time</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select></label>
+    <label className={styles.field}><span className={styles.label}>Recurring day</span><input className={styles.input} type="number" min="1" max="31" value={v.recurringDay} onChange={(e)=>setV({...v,recurringDay:e.target.value})} /></label>
+    <label className={styles.field}><span className={styles.label}>Payment method</span><input className={styles.input} value={v.paymentMethod} onChange={(e)=>setV({...v,paymentMethod:e.target.value})} /></label>
+    <label className={styles.field}><span className={styles.label}>Status</span><input className={styles.input} value={v.status} onChange={(e)=>setV({...v,status:e.target.value})} /></label>
+    <label className={styles.checkboxField}><input type="checkbox" checked={v.billable} onChange={(e)=>setV({...v,billable:e.target.checked})}/> Billable</label>
+    <label className={styles.checkboxField}><input type="checkbox" checked={v.reimbursable} onChange={(e)=>setV({...v,reimbursable:e.target.checked})}/> Reimbursable</label>
+    <label className={`${styles.field} ${styles.fieldWide}`}><span className={styles.label}>Details</span><textarea className={styles.textarea} value={v.details} onChange={(e)=>setV({...v,details:e.target.value})}/></label>
+    <label className={`${styles.field} ${styles.fieldWide}`}><span className={styles.label}>Tags</span><input className={styles.input} value={v.tags} onChange={(e)=>setV({...v,tags:e.target.value})}/></label>
+    <div className={styles.formActions}><button className={styles.button} disabled={busy||!v.date||!v.category||!(Number(v.amount)>0)}>{busy?"Saving…":label}</button><button type="button" className={`${styles.button} ${styles.buttonQuiet}`} onClick={onCancel}>Cancel</button></div>
+  </form>
+}
+
+type RecurringValues={description:string;vendor:string;amount:string;category:string;company:string;frequency:Exclude<ExpenseFrequency,"none">;dayOfMonth:string;startDate:string;endDate:string;status:RecurringExpenseStatus;paymentMethod:string;notes:string};
+function emptyRecurring():RecurringValues{return{description:"",vendor:"",amount:"",category:"Software",company:"Marketing Bull",frequency:"monthly",dayOfMonth:"1",startDate:todayKey(),endDate:"",status:"active",paymentMethod:"",notes:""}}
+function recurringToForm(r:RecurringExpense):RecurringValues{return{description:r.description,vendor:r.vendor,amount:String(r.amount),category:r.category,company:r.company,frequency:r.frequency,dayOfMonth:r.dayOfMonth==null?"":String(r.dayOfMonth),startDate:r.startDate,endDate:r.endDate||"",status:r.status,paymentMethod:r.paymentMethod,notes:r.notes}}
+function recurringPayload(v:RecurringValues){return{...v,amount:Number(v.amount),dayOfMonth:v.dayOfMonth?Number(v.dayOfMonth):null,endDate:v.endDate||null}}
+function RecurringForm({initial,busy,label,onSubmit,onCancel}:{initial:RecurringValues;busy:boolean;label:string;onSubmit:(v:RecurringValues)=>void;onCancel:()=>void}){const[v,setV]=useState(initial);return <form className={styles.form} onSubmit={(e)=>{e.preventDefault();onSubmit(v)}}>
+  <label className={`${styles.field} ${styles.fieldWide}`}><span className={styles.label}>Description</span><input className={styles.input} value={v.description} onChange={(e)=>setV({...v,description:e.target.value})} required autoFocus/></label>
+  <label className={styles.field}><span className={styles.label}>Amount</span><input className={styles.input} type="number" min="0" step="0.01" value={v.amount} onChange={(e)=>setV({...v,amount:e.target.value})} required/></label>
+  <label className={styles.field}><span className={styles.label}>Category</span><input className={styles.input} value={v.category} onChange={(e)=>setV({...v,category:e.target.value})} required/></label>
+  <label className={styles.field}><span className={styles.label}>Company</span><input className={styles.input} value={v.company} onChange={(e)=>setV({...v,company:e.target.value})}/></label>
+  <label className={styles.field}><span className={styles.label}>Vendor</span><input className={styles.input} value={v.vendor} onChange={(e)=>setV({...v,vendor:e.target.value})}/></label>
+  <label className={styles.field}><span className={styles.label}>Frequency</span><select className={styles.select} value={v.frequency} onChange={(e)=>setV({...v,frequency:e.target.value as RecurringValues["frequency"]})}><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select></label>
+  <label className={styles.field}><span className={styles.label}>Day</span><input className={styles.input} type="number" min="1" max="31" value={v.dayOfMonth} onChange={(e)=>setV({...v,dayOfMonth:e.target.value})}/></label>
+  <label className={styles.field}><span className={styles.label}>Starts</span><input className={styles.input} type="date" value={v.startDate} onChange={(e)=>setV({...v,startDate:e.target.value})} required/></label>
+  <label className={styles.field}><span className={styles.label}>Ends</span><input className={styles.input} type="date" value={v.endDate} onChange={(e)=>setV({...v,endDate:e.target.value})}/></label>
+  <label className={styles.field}><span className={styles.label}>Status</span><select className={styles.select} value={v.status} onChange={(e)=>setV({...v,status:e.target.value as RecurringExpenseStatus})}><option value="active">Active</option><option value="paused">Paused</option><option value="cancelled">Cancelled</option></select></label>
+  <label className={styles.field}><span className={styles.label}>Payment method</span><input className={styles.input} value={v.paymentMethod} onChange={(e)=>setV({...v,paymentMethod:e.target.value})}/></label>
+  <label className={`${styles.field} ${styles.fieldWide}`}><span className={styles.label}>Notes</span><textarea className={styles.textarea} value={v.notes} onChange={(e)=>setV({...v,notes:e.target.value})}/></label>
+  <div className={styles.formActions}><button className={styles.button} disabled={busy||!v.description||!v.category||!(Number(v.amount)>0)}>{busy?"Saving…":label}</button><button type="button" className={`${styles.button} ${styles.buttonQuiet}`} onClick={onCancel}>Cancel</button></div>
+  </form>}
+
+export default function ExpensesPage(){
+  const[expenses,setExpenses]=useState<Expense[]|null>(null);const[recurring,setRecurring]=useState<RecurringExpense[]>([]);const[accounts,setAccounts]=useState<ChartAccount[]>([]);
+  const[clients,setClients]=useState<Client[]>([]);const[projects,setProjects]=useState<Project[]>([]);const[defaults,setDefaults]=useState<ExpenseRecentDefaults|null>(null);
+  const[summary,setSummary]=useState({expenses:0,income:0,reimbursable:0});const[tab,setTab]=useState<"entries"|"recurring">("entries");const[creating,setCreating]=useState(false);
+  const[editing,setEditing]=useState<string|null>(null);const[query,setQuery]=useState("");const[kind,setKind]=useState<"all"|ExpenseKind>("all");const[busy,setBusy]=useState(false);const[error,setError]=useState<string|null>(null);
+  async function load(){try{const[a,b,c]=await Promise.all([fetch("/api/expenses?limit=1000",{cache:"no-store"}),fetch("/api/clients?includeArchived=1",{cache:"no-store"}),fetch("/api/projects?includeArchived=1",{cache:"no-store"})]);if([a,b,c].some(redirected))return;const[aj,bj,cj]=await Promise.all([a.json(),b.json(),c.json()]);if(!a.ok)throw new Error(aj.error||"Expenses fetch failed");if(!b.ok||!c.ok)throw new Error("Client/project fetch failed");setExpenses(aj.expenses||[]);setRecurring(aj.recurringExpenses||[]);setAccounts(aj.accounts||[]);setDefaults(aj.recentDefaults||null);setSummary(aj.summary||{expenses:0,income:0,reimbursable:0});setClients(bj.clients||[]);setProjects(cj.projects||[])}catch(e){setError(e instanceof Error?e.message:String(e));setExpenses([])}}
+  useEffect(()=>{const run=async()=>{await load()};void run()},[]);
+  async function submit(method:string,path:string,body?:unknown){setBusy(true);setError(null);try{const r=await fetch(path,{method,headers:body===undefined?undefined:{"Content-Type":"application/json"},body:body===undefined?undefined:JSON.stringify(body)});if(redirected(r))return false;const j=await r.json().catch(()=>null);if(!r.ok)throw new Error(j?.error||`${method} failed`);await load();return true}catch(e){setError(e instanceof Error?e.message:String(e));return false}finally{setBusy(false)}}
+  async function uploadReceipt(id:string,file:File){setBusy(true);setError(null);try{const f=new FormData();f.set("receipt",file);const r=await fetch(`/api/expenses/${id}/receipt`,{method:"POST",body:f});if(redirected(r))return;const j=await r.json().catch(()=>null);if(!r.ok)throw new Error(j?.error||"Receipt upload failed");await load()}catch(e){setError(e instanceof Error?e.message:String(e))}finally{setBusy(false)}}
+  const clientById=useMemo(()=>new Map(clients.map((x)=>[x.id,x.name])),[clients]);const projectById=useMemo(()=>new Map(projects.map((x)=>[x.id,x.name])),[projects]);
+  const categories=useMemo(()=>Array.from(new Set(["Software","Meals","Travel","Advertising","Office","Contract Labor","Other",...(expenses||[]).map((e)=>e.category),...recurring.map((e)=>e.category)])).sort(),[expenses,recurring]);
+  const filtered=useMemo(()=>{const q=query.trim().toLowerCase();return(expenses||[]).filter((e)=>(kind==="all"||e.kind===kind)&&(!q||[e.category,e.company,e.vendor,e.details,e.tags].join(" ").toLowerCase().includes(q)))},[expenses,kind,query]);
+  return <main className={styles.page}><div className={styles.shell}>
+    <header className={styles.header}><div><p className={styles.eyebrow}>Marketing Bull / Tracking</p><h1 className={styles.title}>Expenses</h1></div><button className={styles.button} onClick={()=>setCreating((x)=>!x)}><Plus size={15}/>{tab==="entries"?"Add record":"Add recurring"}</button></header>
+    {error?<p className={styles.error}>{error}</p>:null}
+    <section className={styles.summaryGrid}><div className={styles.summaryItem}><span className={styles.label}>Records</span><strong className={styles.summaryValue}>{expenses?.length??"—"}</strong></div><div className={styles.summaryItem}><span className={styles.label}>Expenses</span><strong className={styles.summaryValue}>{money(summary.expenses)}</strong></div><div className={styles.summaryItem}><span className={styles.label}>Income preserved</span><strong className={styles.summaryValue}>{money(summary.income)}</strong></div><div className={styles.summaryItem}><span className={styles.label}>Annual recurring</span><strong className={styles.summaryValue}>{money(recurring.filter((r)=>r.status==="active").reduce((s,r)=>s+r.annualizedAmount,0))}</strong></div></section>
+    <div className={styles.tabs}><button className={`${styles.button} ${tab==="entries"?styles.tabActive:""}`} onClick={()=>{setTab("entries");setCreating(false);setEditing(null)}}><WalletCards size={14}/>Transactions</button><button className={`${styles.button} ${tab==="recurring"?styles.tabActive:""}`} onClick={()=>{setTab("recurring");setCreating(false);setEditing(null)}}><Repeat2 size={14}/>Recurring ({recurring.length})</button></div>
+    {creating?<section className={styles.card}>{tab==="entries"?<ExpenseForm key={String(defaults?.category)} initial={emptyExpense(defaults)} clients={clients} projects={projects} accounts={accounts} categories={categories} busy={busy} label="Save record" onCancel={()=>setCreating(false)} onSubmit={async(v)=>{if(await submit("POST","/api/expenses",expensePayload(v)))setCreating(false)}}/>:<RecurringForm initial={emptyRecurring()} busy={busy} label="Save recurring expense" onCancel={()=>setCreating(false)} onSubmit={async(v)=>{if(await submit("POST","/api/expenses/recurring",recurringPayload(v)))setCreating(false)}}/>}</section>:null}
+    {tab==="entries"?<><div className={styles.filterRow}><input className={`${styles.input} ${styles.compactInput}`} placeholder="Search records" value={query} onChange={(e)=>setQuery(e.target.value)}/><select className={`${styles.select} ${styles.compactInput}`} value={kind} onChange={(e)=>setKind(e.target.value as typeof kind)}><option value="all">All types</option><option value="expense">Expenses</option><option value="income">Income</option></select><span className={styles.rowMeta}>{filtered.length} shown</span></div><section className={styles.card}>{expenses===null?<div className={styles.loader}><LoaderCircle size={15}/>Loading…</div>:filtered.length===0?<div className={styles.empty}>No matching records.</div>:<div className={styles.list}>{filtered.map((e)=><div className={styles.row} key={e.id}><div className={styles.rowHead}><div><div className={styles.rowTitle}>{e.vendor||e.details||e.category} · {money(e.amount)}</div><div className={styles.rowMeta}>{[friendlyDate(e.date),e.kind,e.category,e.company,e.accountCode?`account ${e.accountCode}`:null,e.projectId?projectById.get(e.projectId):e.clientId?clientById.get(e.clientId):null].filter(Boolean).join(" · ")}</div>{e.details&&e.vendor?<p className={styles.rowDetails}>{e.details}</p>:null}</div><div className={styles.rowActions}>{e.receiptPath?<a className={styles.receiptLink} href={`/api/expenses/${e.id}/receipt`} target="_blank">Receipt</a>:<label className={styles.receiptLink}><Paperclip size={13}/> Attach<input hidden type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(x)=>{const f=x.target.files?.[0];if(f)void uploadReceipt(e.id,f)}}/></label>}<button className={`${styles.button} ${styles.buttonQuiet}`} onClick={()=>setEditing(editing===e.id?null:e.id)}>Edit</button><button className={`${styles.button} ${styles.buttonDanger}`} disabled={busy} onClick={()=>{if(confirm("Delete this record? This cannot be undone."))void submit("DELETE",`/api/expenses/${e.id}`)}}>Delete</button></div></div>{editing===e.id?<ExpenseForm key={e.updatedAt} initial={expenseToForm(e)} clients={clients} projects={projects} accounts={accounts} categories={categories} busy={busy} label="Save changes" onCancel={()=>setEditing(null)} onSubmit={async(v)=>{if(await submit("PUT",`/api/expenses/${e.id}`,expensePayload(v)))setEditing(null)}}/>:null}</div>)}</div>}</section></>:<section className={styles.card}>{recurring.length===0?<div className={styles.empty}>No recurring definitions yet.</div>:<div className={styles.list}>{recurring.map((r)=><div className={styles.row} key={r.id}><div className={styles.rowHead}><div><div className={styles.rowTitle}>{r.description} · {money(r.amount)}/{r.frequency.replace("ly","")}</div><div className={styles.rowMeta}>{[r.status,r.category,r.company,`${money(r.annualizedAmount)}/year`,r.dayOfMonth?`day ${r.dayOfMonth}`:null].filter(Boolean).join(" · ")}</div></div><div className={styles.rowActions}><span className={`${styles.statusChip} ${r.status==="active"?styles.statusActive:""}`}>{r.status}</span><button className={`${styles.button} ${styles.buttonQuiet}`} onClick={()=>setEditing(editing===r.id?null:r.id)}>Edit</button><button className={`${styles.button} ${styles.buttonDanger}`} onClick={()=>{if(confirm("Delete this recurring definition? Generated records stay intact."))void submit("DELETE",`/api/expenses/recurring/${r.id}`)}}>Delete</button></div></div>{editing===r.id?<RecurringForm key={r.updatedAt} initial={recurringToForm(r)} busy={busy} label="Save changes" onCancel={()=>setEditing(null)} onSubmit={async(v)=>{if(await submit("PUT",`/api/expenses/recurring/${r.id}`,recurringPayload(v)))setEditing(null)}}/>:null}</div>)}</div>}</section>}
+    <p className={styles.footerNote}><WalletCards size={14}/> Revenue records are retained as income and excluded from expense totals. Receipts are stored beside the SQLite database.</p>
+  </div></main>
 }

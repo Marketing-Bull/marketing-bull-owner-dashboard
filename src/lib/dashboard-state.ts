@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { cwd } from "node:process";
 import {
   DEFAULT_WIDGET_ORDER,
-  LEGACY_WIDGET_ORDER,
+  LEGACY_WIDGET_ORDERS,
   isCollapsibleId,
   type CollapsibleId,
   type WidgetId
@@ -32,6 +32,10 @@ function databasePath(): string {
   return process.env.OWNER_DASHBOARD_DB_PATH?.trim() || join(cwd(), "data", "dashboard.sqlite");
 }
 
+export function getDatabasePath(): string {
+  return databasePath();
+}
+
 /** Backups live next to the database so they move with it. */
 function backupsDirectory(): string {
   return join(dirname(databasePath()), "backups");
@@ -46,6 +50,7 @@ type DashboardStateRow = {
   hyperfocus_json: string;
   widget_order_json: string;
   collapsed_json: string;
+  hidden_widgets_json: string;
 };
 
 let database: DatabaseSync | null = null;
@@ -88,16 +93,24 @@ function normalizeSubtract(value: unknown): ManualState["hyperfocus"]["subtract"
 
 function normalizeWidgetOrder(value: unknown): WidgetId[] {
   if (!Array.isArray(value)) return [...DEFAULT_WIDGET_ORDER];
+  // Every order containing the retired Snapshot id predates the layout editor.
+  // Apply the requested Daily Note / Calendar default once; the next autosave
+  // writes only current ids, after which the user's custom order is preserved.
+  if (value.includes("openSlot")) return [...DEFAULT_WIDGET_ORDER];
   const valid = value.filter((entry): entry is WidgetId => DEFAULT_WIDGET_ORDER.includes(entry as WidgetId));
   const deduped = Array.from(new Set(valid));
-  if (
-    deduped.length === LEGACY_WIDGET_ORDER.length &&
-    deduped.every((id, index) => id === LEGACY_WIDGET_ORDER[index])
-  ) {
+  if (LEGACY_WIDGET_ORDERS.some((order) => order.length === value.length && order.every((id, index) => id === value[index]))) {
     return [...DEFAULT_WIDGET_ORDER];
   }
   const missing = DEFAULT_WIDGET_ORDER.filter((id) => !deduped.includes(id));
   return [...deduped, ...missing];
+}
+
+function normalizeHiddenWidgets(value: unknown): WidgetId[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(value.filter((entry): entry is WidgetId => DEFAULT_WIDGET_ORDER.includes(entry as WidgetId)))
+  );
 }
 
 /** Keeps only known ids, deduped, so a stale id can never hide a live panel. */
@@ -227,6 +240,7 @@ export type DashboardStatePayload = {
   manual: ManualState;
   widgetOrder: WidgetId[];
   collapsed: CollapsibleId[];
+  hiddenWidgets: WidgetId[];
 };
 
 /** A malformed JSON column must not 500 the whole dashboard. */
@@ -243,7 +257,7 @@ export function loadDashboardState(): DashboardStatePayload {
   const db = getDatabase();
 
   const row = db.prepare(`
-    SELECT goals_json, mrr_current, mrr_projected, mrr_mom_delta, whats_important, hyperfocus_json, widget_order_json, collapsed_json
+    SELECT goals_json, mrr_current, mrr_projected, mrr_mom_delta, whats_important, hyperfocus_json, widget_order_json, collapsed_json, hidden_widgets_json
     FROM dashboard_state WHERE id = 1
   `).get() as DashboardStateRow | undefined;
 
@@ -251,7 +265,8 @@ export function loadDashboardState(): DashboardStatePayload {
     return {
       manual: DEFAULT_MANUAL_STATE,
       widgetOrder: [...DEFAULT_WIDGET_ORDER],
-      collapsed: []
+      collapsed: [],
+      hiddenWidgets: []
     };
   }
 
@@ -274,7 +289,8 @@ export function loadDashboardState(): DashboardStatePayload {
       whatsImportant: row.whats_important
     },
     widgetOrder: normalizeWidgetOrder(safeParse(row.widget_order_json)),
-    collapsed: normalizeCollapsed(safeParse(row.collapsed_json))
+    collapsed: normalizeCollapsed(safeParse(row.collapsed_json)),
+    hiddenWidgets: normalizeHiddenWidgets(safeParse(row.hidden_widgets_json))
   };
 }
 
@@ -375,6 +391,7 @@ export function saveDashboardState(
   const manual = normalizeManualState(payload.manual);
   const widgetOrder = normalizeWidgetOrder(payload.widgetOrder);
   const collapsed = normalizeCollapsed(payload.collapsed);
+  const hiddenWidgets = normalizeHiddenWidgets(payload.hiddenWidgets);
 
   // One transaction around the whole save. Previously the dashboard_state
   // UPDATE ran before BEGIN, so a failure while rewriting phone_calls rolled
@@ -383,7 +400,7 @@ export function saveDashboardState(
   try {
     db.prepare(`
       UPDATE dashboard_state
-      SET goals_json = ?, mrr_current = ?, mrr_projected = ?, mrr_mom_delta = ?, whats_important = ?, hyperfocus_json = ?, widget_order_json = ?, collapsed_json = ?, updated_at = CURRENT_TIMESTAMP
+      SET goals_json = ?, mrr_current = ?, mrr_projected = ?, mrr_mom_delta = ?, whats_important = ?, hyperfocus_json = ?, widget_order_json = ?, collapsed_json = ?, hidden_widgets_json = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = 1
     `).run(
       JSON.stringify(manual.goals),
@@ -393,7 +410,8 @@ export function saveDashboardState(
       manual.whatsImportant,
       JSON.stringify(manual.hyperfocus),
       JSON.stringify(widgetOrder),
-      JSON.stringify(collapsed)
+      JSON.stringify(collapsed),
+      JSON.stringify(hiddenWidgets)
     );
 
     db.prepare("DELETE FROM phone_calls").run();
@@ -421,5 +439,5 @@ export function saveDashboardState(
     throw error;
   }
 
-  return { manual, widgetOrder, collapsed };
+  return { manual, widgetOrder, collapsed, hiddenWidgets };
 }

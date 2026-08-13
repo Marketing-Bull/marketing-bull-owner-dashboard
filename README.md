@@ -8,10 +8,10 @@ The dashboard is mid-way through absorbing Recoup's and Mission Control's
 client / project / time / expense / mileage model and becoming the single
 system of record. The full scope — decisions, target schema, phase status —
 lives at [`docs/dashboard-consolidation-scope.html`](docs/dashboard-consolidation-scope.html)
-(open it in a browser). Phases 0–3 are done: Time is an owned entity with
-frozen-rate CRUD, recent-entry defaults, local dashboard rollups, and an
-idempotent mission-control import. The verified live source imported all 98
-rows on 2026-08-13; next comes expenses and mileage.
+(open it in a browser). Phases 0–4 are done: Clients, Projects, Time, Expenses,
+recurring costs, accounting references, and Mileage are owned locally. The
+verified live source imported 98 time rows, 708 financial records, 13 recurring
+definitions, and 4 trips on 2026-08-13. Next comes Calendar views.
 
 ## What It Is
 
@@ -43,6 +43,10 @@ The app has 3 data layers:
     at save, recent client/project prefill, and nullable legacy start/end times
   - `Time by Project`, now rolled up from local time entries rather than
     ClickUp time tracking
+  - **`Expenses` and `Mileage` — owned entities as of phase 4**, with CRUD at
+    `/expenses` and `/mileage`, receipt attachments, recurring-cost
+    annualization, chart-of-accounts references, round-trip computation,
+    recent-route reuse, and an editable reimbursement rate
   - `clickup_tasks` and `clickup_sync_state`, a local cache of assigned ClickUp
     tasks plus the last sync attempt/result
   - `Revenue`, with client MRR derived from active client rows and manual
@@ -62,8 +66,8 @@ the source of truth for task status.
 3. `UI/runtime layer`
 - Persistent sidebar menu (mission-control-style layout: Operate / Track /
   System / External sections) around every screen except `/login`; drawer +
-  top bar under 860px. `/time` is live; screens for phases 4–5 (`/expenses`,
-  `/mileage`, `/calendar`) remain honest placeholders marked "soon";
+  top bar under 860px. `/time`, `/expenses`, and `/mileage` are live;
+  `/calendar` remains an honest phase 5 placeholder marked "soon";
   `/settings` manages the ClickUp API key, shows protection state and data
   locations, and links the consolidation scope at `/scope`
 - Drag-and-drop widget ordering
@@ -86,6 +90,11 @@ feeds it reads:
 - `daily_history`: saved daily wins and the streak derived from those rows
 - `time_entries`: owned hours, frozen billing-rate snapshots, billable status,
   and optional legacy start/end times
+- `expenses`, `recurring_expenses`, `chart_accounts`, and
+  `expense_category_accounts`: financial records plus the accounting reference
+  data needed for later Schedule-C reporting
+- `mileage_entries`: stored one-way and computed round-trip miles; the current
+  reimbursement rate lives in `app_settings`
 - `clickup_tasks`: cached assigned ClickUp tasks; refreshed when the cache is
   missing or more than one hour old
 - External feeds: ClickUp assigned tasks and calendar events
@@ -160,7 +169,7 @@ without credentials means the explicit opt-out is active.
 ### `GET /api/clients` · `POST /api/clients` · `GET|PUT|DELETE /api/clients/{id}`
 - The Clients entity: list (`?includeArchived=1` to include archived), create,
   read, update. DELETE archives — hard deletion does not exist, because time
-  entries and expenses will hang off these rows from phase 3 on
+  entries, expenses, and mileage records hang off these rows
 - Validation errors return 400 with a message; unknown ids 404
 
 ### `GET /api/projects` · `POST /api/projects` · `GET|PUT|DELETE /api/projects/{id}`
@@ -180,14 +189,30 @@ without credentials means the explicit opt-out is active.
 - List responses include `recentDefaults`, used by `/time` to prefill the
   last-used client, project, and billable choice
 
+### `GET /api/expenses` · `POST /api/expenses` · `GET|PUT|DELETE /api/expenses/{id}`
+- Full financial-record CRUD with client/project validation, expense versus
+  income classification, company/vendor fields, billable and reimbursable
+  flags, accounting codes, recurring frequency, and annualized amount
+- `GET|POST /api/expenses/recurring` and
+  `GET|PUT|DELETE /api/expenses/recurring/{id}` manage recurring definitions
+- `GET|POST|DELETE /api/expenses/{id}/receipt` serves and manages PDF/JPEG/PNG/
+  WebP receipts up to 10 MB, stored beside the SQLite database
+
+### `GET /api/mileage` · `POST /api/mileage` · `GET|PUT|DELETE /api/mileage/{id}`
+- Full trip CRUD. `totalMiles` is always recomputed as
+  `roundTrip ? miles × 2 : miles`; callers cannot override it
+- Returns unique recent routes for quick prefill and reimbursement totals at
+  the rate managed by `GET|PUT /api/mileage/settings`
+
 ### `POST /api/admin/import-mission-control`
 - Body: `{ "sourcePath": "/path/to/AMB-mission-control.db" }` — a file already
   on the server
-- Imports clients, projects, and time entries with the cleaning rules from the scope doc
+- Imports clients, projects, time, accounting references, recurring expenses,
+  financial records, mileage, and the mileage-rate setting with the cleaning rules from the scope doc
   (status normalization, 0-means-unset money fields, soft-deleted projects
   skipped, dangling links imported unassigned, invalid time durations skipped,
-  and the known `10:30` date repaired from its `created_at` day), each fix-up
-  reported in `warnings`
+  the known `10:30` date repaired, Revenue rows classified as income, and
+  mileage totals recomputed), each fix-up reported in `warnings`
 - **Idempotent**: every imported row keeps its mission-control id in `mcId`,
   and re-running upserts by it — a fresher MC copy converges instead of
   duplicating
@@ -285,9 +310,11 @@ from mission-control (`src/lib/entity-seed.ts`, generated from the verified
 existing row, seeded or hand-made, disables it forever, so nothing the owner
 edits is ever overwritten. Rows keep `mc_id`, so running the real
 mission-control import later converges onto them rather than duplicating.
-Time rows are not committed as seed data. This checkout's local database was
-loaded with all 98 rows on 2026-08-13; a separately deployed database must run
-the same import against the verified mission-control file.
+Time, expense, recurring, accounting, and mileage rows are not committed as
+seed data. This checkout's local database was loaded with 98 time rows, 708
+financial rows, 13 recurring definitions, 30 chart accounts, 24 category
+mappings, and 4 mileage rows on 2026-08-13; a separately deployed database must
+run the same import against the verified mission-control file.
 This is deliberate: deploys need zero setup and no database hand-off. Delete
 the file and its call in `dashboard-state.ts` once seeding has outlived its
 usefulness.
@@ -471,10 +498,14 @@ ClickUp source ids when it stops being one.
 - `src/app/(app)/clients/page.tsx`
 - `src/app/(app)/projects/page.tsx`
 - `src/app/(app)/time/page.tsx`
+- `src/app/(app)/expenses/page.tsx`
+- `src/app/(app)/mileage/page.tsx`
 - `src/app/(app)/settings/page.tsx`
 - `src/app/api/clients/route.ts`
 - `src/app/api/projects/route.ts`
 - `src/app/api/time-entries/route.ts`
+- `src/app/api/expenses/route.ts`
+- `src/app/api/mileage/route.ts`
 - `src/app/api/admin/import-mission-control/route.ts`
 - `src/lib/backup.ts`
 - `src/lib/dashboard-state.ts`
@@ -486,6 +517,8 @@ ClickUp source ids when it stops being one.
 - `src/lib/sample-data.ts`
 - `src/lib/schema.ts`
 - `src/lib/time-entries.ts`
+- `src/lib/expenses.ts`
+- `src/lib/mileage.ts`
 - `src/lib/types.ts`
 
 ## What Still Needs Improvement
@@ -496,6 +529,12 @@ Known and deliberate, roughly in the order they are worth fixing:
   Settings, with env/OpenClaw as fallback. Calendar still shells out to
   `~/.local/bin/gog`, so it remains tied to the machine where that account is
   configured.
+- Mileage entry currently accepts addresses and manual miles. Maps
+  autocomplete and automatic distance calculation remain a later integration;
+  recent-route prefill covers repeated trips without requiring a Maps key.
+- The imported source has no account mapping for 584 records (mostly the broad
+  `Operating Expenses` category). They remain lossless with an unset account
+  code and must be categorized before Schedule-C reports can be authoritative.
 - **`ClickUp Tasks` ranking is heuristic, and its lens weighting does not work.** In
   `scoreTaskAgainstBottleneck`, lens matches are meant to score 2 against 4 for
   everything else, but a single token is compared against the whole `lens`

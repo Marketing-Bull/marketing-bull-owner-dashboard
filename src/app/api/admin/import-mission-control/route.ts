@@ -52,6 +52,11 @@ export async function POST(request: Request) {
     mc.prepare("SELECT COUNT(*) FROM clients").get();
     mc.prepare("SELECT COUNT(*) FROM projects").get();
     mc.prepare("SELECT COUNT(*) FROM time_entries").get();
+    mc.prepare("SELECT COUNT(*) FROM chart_of_accounts").get();
+    mc.prepare("SELECT COUNT(*) FROM category_account_map").get();
+    mc.prepare("SELECT COUNT(*) FROM recurring_expenses").get();
+    mc.prepare("SELECT COUNT(*) FROM expenses").get();
+    mc.prepare("SELECT COUNT(*) FROM mileage_entries").get();
 
     const summary = runMissionControlImport(mc, getDatabase());
     return NextResponse.json(summary, { headers: { "Cache-Control": "no-store" } });

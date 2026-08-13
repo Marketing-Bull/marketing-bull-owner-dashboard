@@ -35,6 +35,7 @@ describe("normalizeDashboardData", () => {
       const result = normalizeDashboardData(input);
 
       // These are precisely the accesses the component makes unguarded.
+      expect(Array.isArray(result.hours.day)).toBe(true);
       expect(Array.isArray(result.hours.week)).toBe(true);
       expect(Array.isArray(result.hours.month)).toBe(true);
       expect(Array.isArray(result.upNext)).toBe(true);
@@ -51,7 +52,7 @@ describe("normalizeDashboardData", () => {
   it("preserves valid data unchanged", () => {
     const result = normalizeDashboardData({
       priorities: [{ key: "P0", label: "Critical", projects: [{ id: "a", title: "Ship it", href: "https://x" }] }],
-      hours: { week: [{ label: "Dashboard", hours: 6.5 }], month: [] },
+      hours: { day: [{ label: "Dashboard", hours: 1 }], week: [{ label: "Dashboard", hours: 6.5 }], month: [] },
       upNext: [{ id: "t1", title: "Review", due: "Today 10:30", priority: "P1", done: true }],
       source: "live",
       generatedAt: 1_700_000_000_000
@@ -61,6 +62,7 @@ describe("normalizeDashboardData", () => {
       { id: "a", title: "Ship it", subtitle: undefined, status: undefined, href: "https://x" }
     ]);
     expect(result.hours.week).toEqual([{ label: "Dashboard", hours: 6.5 }]);
+    expect(result.hours.day).toEqual([{ label: "Dashboard", hours: 1 }]);
     expect(result.upNext[0]).toMatchObject({ id: "t1", priority: "P1", done: true });
     expect(result.source).toBe("live");
     expect(result.generatedAt).toBe(1_700_000_000_000);

@@ -87,7 +87,7 @@ describe("existing database without daily_history", () => {
 
     // The first save on the upgraded database begins the record.
     saveDashboardState(
-      { manual: state.manual, widgetOrder: state.widgetOrder, collapsed: state.collapsed },
+      { manual: state.manual, widgetOrder: state.widgetOrder, collapsed: state.collapsed, hiddenWidgets: state.hiddenWidgets },
       "2026-08-12"
     );
     expect(loadHistory("2026-08-12").map((entry) => entry.dailyWin)).toEqual(["kept win"]);
@@ -102,7 +102,10 @@ describe("existing database without daily_history", () => {
       "002-clients-projects",
       "003-time-entries",
       "004-clickup-task-cache",
-      "005-app-settings"
+      "005-app-settings",
+      "006-expenses-mileage",
+      "007-clickup-task-associations",
+      "008-widget-visibility"
     ]);
     upgraded.close();
 

@@ -1,4 +1,4 @@
-/* Shared styles for the Clients, Projects, and Time management pages. */
+/* Shared styles for the owned entity and tracking management pages. */
 
 .page {
   min-height: 100vh;
@@ -105,6 +105,8 @@
   border: 1px solid rgba(31, 41, 55, 0.08);
   border-radius: 14px;
   padding: 12px 14px;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 92px;
 }
 
 .rowArchived {
@@ -279,6 +281,60 @@
   color: var(--muted);
   font-size: 12px;
   margin: 0;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tabActive {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.filterRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.compactInput {
+  width: auto;
+  min-width: 140px;
+}
+
+.recentTrips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.recentTrip {
+  min-width: 220px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.receiptLink {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fileInput {
+  max-width: 230px;
+  font-size: 12px;
 }
 
 @media (max-width: 680px) {
