@@ -8,16 +8,31 @@ import {
   type CollapsibleId,
   type WidgetId
 } from "@/lib/dashboard-layout";
+import { ensureDailyBackup } from "@/lib/backup";
 import {
   buildHistorySnapshot,
   HISTORY_LOOKBACK_DAYS,
   shiftDayKey,
   todayKey
 } from "@/lib/history";
+import { runMigrations, type Migration } from "@/lib/migrations";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import type { HistoryEntry, ManualState, PhoneCallItem } from "@/lib/types";
 
-const DATABASE_PATH = join(cwd(), "data", "dashboard.sqlite");
+/**
+ * Read lazily (not at module load) so tests and alternate deployments can point
+ * the store elsewhere with `OWNER_DASHBOARD_DB_PATH`. Client financial records
+ * are coming to this file; "wherever the process happened to be started from"
+ * stops being an acceptable default the moment they land.
+ */
+function databasePath(): string {
+  return process.env.OWNER_DASHBOARD_DB_PATH?.trim() || join(cwd(), "data", "dashboard.sqlite");
+}
+
+/** Backups live next to the database so they move with it. */
+function backupsDirectory(): string {
+  return join(dirname(databasePath()), "backups");
+}
 
 type DashboardStateRow = {
   goals_json: string;
@@ -32,71 +47,82 @@ type DashboardStateRow = {
 
 let database: DatabaseSync | null = null;
 
+/**
+ * The schema, as an ordered migration list (see `@/lib/migrations`).
+ *
+ * `001-baseline` is written idempotently — IF NOT EXISTS plus a conditional
+ * column add — because it has to adopt live databases created across three
+ * earlier schema generations (pre-`collapsed_json`, pre-`daily_history`, and
+ * current) as well as build a fresh file. It is the only migration allowed
+ * that shape: everything after it runs against a known state and must be a
+ * plain, run-once migration.
+ */
+const DASHBOARD_MIGRATIONS: Migration[] = [
+  {
+    id: "001-baseline",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS dashboard_state (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          goals_json TEXT NOT NULL,
+          mrr_current TEXT NOT NULL,
+          mrr_projected TEXT NOT NULL,
+          mrr_mom_delta TEXT NOT NULL,
+          whats_important TEXT NOT NULL,
+          hyperfocus_json TEXT NOT NULL,
+          widget_order_json TEXT NOT NULL,
+          collapsed_json TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS phone_calls (
+          id TEXT PRIMARY KEY,
+          column_name TEXT NOT NULL CHECK (column_name IN ('toMake', 'made')),
+          sort_order INTEGER NOT NULL,
+          name TEXT NOT NULL,
+          number TEXT NOT NULL,
+          checked INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- One row per local calendar day. dashboard_state holds only the
+        -- current values (id = 1), so before this table every save erased the
+        -- day before it and nothing could be counted or looked back at.
+        CREATE TABLE IF NOT EXISTS daily_history (
+          day TEXT PRIMARY KEY,
+          daily_win TEXT NOT NULL,
+          lens TEXT NOT NULL,
+          target TEXT NOT NULL,
+          bottleneck TEXT NOT NULL,
+          mrr_current TEXT NOT NULL,
+          mrr_projected TEXT NOT NULL,
+          mrr_mom_delta TEXT NOT NULL,
+          goals_json TEXT NOT NULL,
+          whats_important TEXT NOT NULL,
+          calls_made INTEGER NOT NULL,
+          calls_planned INTEGER NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // Databases created before collapsed_json existed lack the column, and
+      // CREATE TABLE IF NOT EXISTS above is a no-op against them.
+      const columns = db.prepare("PRAGMA table_info(dashboard_state)").all() as Array<{ name?: unknown }>;
+      if (!columns.some((column) => String(column.name) === "collapsed_json")) {
+        db.exec("ALTER TABLE dashboard_state ADD COLUMN collapsed_json TEXT NOT NULL DEFAULT '[]'");
+      }
+    }
+  }
+];
+
 function getDatabase(): DatabaseSync {
   if (database) return database;
 
-  mkdirSync(dirname(DATABASE_PATH), { recursive: true });
-  database = new DatabaseSync(DATABASE_PATH);
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS dashboard_state (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      goals_json TEXT NOT NULL,
-      mrr_current TEXT NOT NULL,
-      mrr_projected TEXT NOT NULL,
-      mrr_mom_delta TEXT NOT NULL,
-      whats_important TEXT NOT NULL,
-      hyperfocus_json TEXT NOT NULL,
-      widget_order_json TEXT NOT NULL,
-      collapsed_json TEXT NOT NULL DEFAULT '[]',
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS phone_calls (
-      id TEXT PRIMARY KEY,
-      column_name TEXT NOT NULL CHECK (column_name IN ('toMake', 'made')),
-      sort_order INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      number TEXT NOT NULL,
-      checked INTEGER NOT NULL DEFAULT 0
-    );
-
-    -- One row per local calendar day. dashboard_state holds only the current
-    -- values (id = 1), so before this table every save erased the day before it
-    -- and nothing could be counted, trended, or looked back at.
-    CREATE TABLE IF NOT EXISTS daily_history (
-      day TEXT PRIMARY KEY,
-      daily_win TEXT NOT NULL,
-      lens TEXT NOT NULL,
-      target TEXT NOT NULL,
-      bottleneck TEXT NOT NULL,
-      mrr_current TEXT NOT NULL,
-      mrr_projected TEXT NOT NULL,
-      mrr_mom_delta TEXT NOT NULL,
-      goals_json TEXT NOT NULL,
-      whats_important TEXT NOT NULL,
-      calls_made INTEGER NOT NULL,
-      calls_planned INTEGER NOT NULL,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  applyMigrations(database);
+  const path = databasePath();
+  mkdirSync(dirname(path), { recursive: true });
+  database = new DatabaseSync(path);
+  runMigrations(database, DASHBOARD_MIGRATIONS);
 
   return database;
-}
-
-/**
- * `CREATE TABLE IF NOT EXISTS` is a no-op against a database created by an
- * earlier version, so new columns have to be added explicitly or every read
- * fails with "no such column" on an existing install.
- */
-function applyMigrations(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(dashboard_state)").all() as Array<{ name?: unknown }>;
-  const columnNames = new Set(columns.map((column) => String(column.name)));
-
-  if (!columnNames.has("collapsed_json")) {
-    db.exec("ALTER TABLE dashboard_state ADD COLUMN collapsed_json TEXT NOT NULL DEFAULT '[]'");
-  }
 }
 
 function normalizeGoals(value: unknown): ManualState["goals"] {
@@ -384,6 +410,17 @@ export function saveDashboardState(
 ): DashboardStatePayload {
   ensureSeedState();
   const db = getDatabase();
+
+  // Before the write and outside the transaction (VACUUM cannot run inside
+  // one): the first save of each day snapshots the database as yesterday left
+  // it. A failed backup is logged, never allowed to block the save itself.
+  try {
+    ensureDailyBackup(db, backupsDirectory(), day);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error(`[owner-dashboard] daily backup failed (save continued): ${reason}`);
+  }
+
   const manual = normalizeManualState(payload.manual);
   const widgetOrder = normalizeWidgetOrder(payload.widgetOrder);
   const collapsed = normalizeCollapsed(payload.collapsed);

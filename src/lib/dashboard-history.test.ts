@@ -6,33 +6,26 @@
  * the lookback window. A streak counted off rows that did not round-trip is
  * wrong in a way no amount of testing computeStreak would catch.
  *
- * dashboard-state.ts resolves its path from cwd at module load, so the only way
- * to keep this off the real data/dashboard.sqlite is to chdir into a temp
- * directory and import afterwards. Vitest forks each test file into its own
- * process, so the chdir cannot reach another suite; cwd is restored anyway in
- * case that ever stops being true. Making the path configurable would be the
- * better fix and is worth doing when the ClickUp key moves to env.
+ * The store is pointed at a temp directory via OWNER_DASHBOARD_DB_PATH (set
+ * before the import; the module holds a singleton connection), so `npm test`
+ * never touches the real dashboard.sqlite.
  */
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import { DEFAULT_WIDGET_ORDER } from "@/lib/dashboard-layout";
 import { computeStreak } from "@/lib/history";
 import type { ManualState } from "@/lib/types";
 
-const originalCwd = process.cwd();
-
-afterAll(() => {
-  process.chdir(originalCwd);
-});
-
 describe("daily_history end to end", () => {
   it("records, rewrites and counts real rows", async () => {
-    process.chdir(mkdtempSync(join(tmpdir(), "owner-dash-")));
-    // Imported after chdir: DATABASE_PATH is resolved at module load.
+    process.env.OWNER_DASHBOARD_DB_PATH = join(
+      mkdtempSync(join(tmpdir(), "owner-dash-")),
+      "dashboard.sqlite"
+    );
     const { saveDashboardState, loadHistory, loadDashboardState } = await import("@/lib/dashboard-state");
 
     const withWin = (dailyWin: string): ManualState => ({

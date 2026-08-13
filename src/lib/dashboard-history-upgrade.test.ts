@@ -8,23 +8,21 @@
  * database" proves nothing about the only database that matters.
  *
  * Separate file from dashboard-history.test.ts on purpose: each needs its own
- * chdir before the first import of dashboard-state, and the module cache is
- * shared within a file.
+ * OWNER_DASHBOARD_DB_PATH in place before the first import of dashboard-state,
+ * and the module cache (with its singleton connection) is shared within a file.
+ *
+ * This now also covers migration-runner adoption: the old database predates
+ * schema_migrations itself, so opening it must apply and record the baseline
+ * without disturbing the existing rows.
  */
 
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import { DEFAULT_WIDGET_ORDER } from "@/lib/dashboard-layout";
-
-const originalCwd = process.cwd();
-
-afterAll(() => {
-  process.chdir(originalCwd);
-});
 
 describe("existing database without daily_history", () => {
   it("gains the table and keeps its old rows", async () => {
@@ -71,7 +69,7 @@ describe("existing database without daily_history", () => {
     );
     old.close();
 
-    process.chdir(root);
+    process.env.OWNER_DASHBOARD_DB_PATH = join(root, "data", "dashboard.sqlite");
     const { loadDashboardState, loadHistory, saveDashboardState } = await import("@/lib/dashboard-state");
 
     // Reading an old database must not fail on the missing table...
@@ -92,5 +90,17 @@ describe("existing database without daily_history", () => {
       "2026-08-12"
     );
     expect(loadHistory("2026-08-12").map((entry) => entry.dailyWin)).toEqual(["kept win"]);
+
+    // The runner adopted the legacy file: baseline recorded, rows intact.
+    const upgraded = new DatabaseSync(join(root, "data", "dashboard.sqlite"));
+    const recorded = upgraded
+      .prepare("SELECT id FROM schema_migrations ORDER BY id")
+      .all() as Array<{ id: string }>;
+    expect(recorded.map((row) => row.id)).toEqual(["001-baseline"]);
+    upgraded.close();
+
+    // And the first save also produced the day's backup next to the database.
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(root, "data", "backups", "dashboard-2026-08-12.sqlite"))).toBe(true);
   });
 });
