@@ -67,6 +67,57 @@ export type CalendarEvent = {
   href?: string;
 };
 
+/**
+ * Client and Project — the first entities the dashboard owns rather than
+ * reads (consolidation phase 2). Column parity with the target schema; see
+ * `src/lib/schema.ts` migration 002 for what each field means.
+ */
+export const CLIENT_STATUSES = ["active", "prospect", "on_hold"] as const;
+export type ClientStatus = (typeof CLIENT_STATUSES)[number];
+
+export const PAYMENT_TYPES = ["mrr", "hourly", "one-time"] as const;
+export type PaymentType = (typeof PAYMENT_TYPES)[number];
+
+export const PROJECT_STATUSES = ["active", "on_hold", "completed"] as const;
+export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
+
+export type Client = {
+  id: string;
+  /** Row id in the retired mission-control database; null for native rows. */
+  mcId: number | null;
+  name: string;
+  status: ClientStatus;
+  paymentType: PaymentType;
+  mrr: number | null;
+  hourlyRate: number | null;
+  projectEstCost: number | null;
+  paidThroughDate: string;
+  invoiceStatus: string;
+  contactName: string;
+  contactEmail: string;
+  contactPhone: string;
+  notes: string;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Project = {
+  id: string;
+  mcId: number | null;
+  clientId: string | null;
+  name: string;
+  description: string;
+  hourlyRateOverride: number | null;
+  status: ProjectStatus;
+  notes: string;
+  urgent: boolean;
+  important: boolean;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ClickUpProject = {
   id: string;
   title: string;
@@ -100,8 +151,6 @@ export type UpNextTask = {
 
 export type DashboardData = {
   priorities: PriorityBucket[];
-  projects: ClickUpProject[];
-  clients: ClickUpProject[];
   hours: {
     week: HoursEntry[];
     month: HoursEntry[];

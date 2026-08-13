@@ -36,10 +36,13 @@ import {
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import type {
   CalendarEvent,
+  ClickUpProject,
+  Client,
   DashboardData,
   HistoryEntry,
   ManualState,
   PhoneCallItem,
+  Project,
   UpNextTask
 } from "@/lib/types";
 
@@ -232,20 +235,23 @@ function CollectionCard({
   eyebrow,
   dragLabel,
   loadingLabel,
+  emptyLabel,
   items,
   loading,
   error,
-  source,
+  manageHref,
   collapseProps
 }: {
   title: string;
   eyebrow: string;
   dragLabel: string;
   loadingLabel: string;
-  items: DashboardData["projects"];
+  emptyLabel?: string;
+  items: ClickUpProject[];
   loading: boolean;
   error: string | null;
-  source: DashboardData["source"];
+  /** Where the full management page for this entity lives. */
+  manageHref: string;
   collapseProps: { collapsed: boolean; onToggleCollapse: () => void };
 }) {
   return (
@@ -254,14 +260,18 @@ function CollectionCard({
       eyebrow={eyebrow}
       dragLabel={dragLabel}
       {...collapseProps}
-      action={<span className={styles.badge}>{source === "live" ? "Live ClickUp" : "Sample"}</span>}
+      action={
+        <a href={manageHref} className={styles.inlineLinkText}>
+          Manage
+        </a>
+      }
     >
       {loading ? (
         <div className={styles.loader}><LoaderCircle size={16} /> {loadingLabel}</div>
       ) : error ? (
         <div className={styles.error}>{error}</div>
       ) : items.length === 0 ? (
-        <div className={styles.empty}>Nothing to show yet.</div>
+        <div className={styles.empty}>{emptyLabel || "Nothing to show yet."}</div>
       ) : (
         <div className={styles.stack}>
           {items.map((item) => (
@@ -288,6 +298,11 @@ export function OwnerDashboard({ version }: { version: string }) {
   const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>([...DEFAULT_WIDGET_ORDER]);
   const [collapsed, setCollapsed] = useState<CollapsibleId[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  // The entities the dashboard owns (consolidation phase 2), served locally.
+  const [localClients, setLocalClients] = useState<Client[]>([]);
+  const [localProjects, setLocalProjects] = useState<Project[]>([]);
+  const [entitiesError, setEntitiesError] = useState<string | null>(null);
+  const [loadingEntities, setLoadingEntities] = useState(true);
   // Assume protected until the server says otherwise, so a failed state fetch
   // never produces a false "unprotected" claim.
   const [authConfigured, setAuthConfigured] = useState(true);
@@ -417,6 +432,27 @@ export function OwnerDashboard({ version }: { version: string }) {
     }
   }
 
+  async function fetchEntities() {
+    setEntitiesError(null);
+    try {
+      const [clientsResponse, projectsResponse] = await Promise.all([
+        fetch("/api/clients", { cache: "no-store" }),
+        fetch("/api/projects", { cache: "no-store" })
+      ]);
+      if (redirectedToLogin(clientsResponse) || redirectedToLogin(projectsResponse)) return;
+      const clientsJson = await clientsResponse.json();
+      const projectsJson = await projectsResponse.json();
+      if (!clientsResponse.ok) throw new Error(clientsJson?.error || "Clients fetch failed");
+      if (!projectsResponse.ok) throw new Error(projectsJson?.error || "Projects fetch failed");
+      setLocalClients(Array.isArray(clientsJson?.clients) ? clientsJson.clients : []);
+      setLocalProjects(Array.isArray(projectsJson?.projects) ? projectsJson.projects : []);
+    } catch (error) {
+      setEntitiesError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoadingEntities(false);
+    }
+  }
+
   async function fetchCalendarData() {
     setCalendarError(null);
     try {
@@ -440,7 +476,7 @@ export function OwnerDashboard({ version }: { version: string }) {
 
   useEffect(() => {
     const run = async () => {
-      await Promise.all([fetchDashboardState(), fetchDashboardData(), fetchCalendarData()]);
+      await Promise.all([fetchDashboardState(), fetchDashboardData(), fetchCalendarData(), fetchEntities()]);
     };
     void run();
   }, []);
@@ -555,11 +591,12 @@ export function OwnerDashboard({ version }: { version: string }) {
     setLoadingDashboard(true);
     setLoadingCalendar(true);
     setLoadingState(true);
+    setLoadingEntities(true);
     void (async () => {
       // Persist unsaved edits first, or the state refetch below would overwrite
       // them with the server's older copy.
       await flushPendingSave();
-      await Promise.all([fetchDashboardState(), fetchDashboardData(), fetchCalendarData()]);
+      await Promise.all([fetchDashboardState(), fetchDashboardData(), fetchCalendarData(), fetchEntities()]);
     })();
   }
 
@@ -575,7 +612,42 @@ export function OwnerDashboard({ version }: { version: string }) {
   const hoursEntries = dashboardData?.hours[hoursWindow] ?? [];
   const maxHours = Math.max(...hoursEntries.map((entry) => entry.hours), 1);
 
-  const isRefreshing = loadingDashboard || loadingCalendar || loadingState;
+  const isRefreshing = loadingDashboard || loadingCalendar || loadingState || loadingEntities;
+
+  // Local entities, shaped for the chip widgets. Active first, capped so the
+  // widget stays a glance; the full lists live on /clients and /projects.
+  const clientNameById = useMemo(
+    () => new Map(localClients.map((client) => [client.id, client.name])),
+    [localClients]
+  );
+  const clientChips = useMemo(
+    () =>
+      localClients.slice(0, 6).map((client) => ({
+        id: client.id,
+        title: client.name,
+        subtitle: [
+          client.status.replace("_", " "),
+          client.mrr ? `${formatMoney(String(client.mrr))}/mo` : null
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      })),
+    [localClients]
+  );
+  const projectChips = useMemo(
+    () =>
+      localProjects
+        .filter((project) => project.status === "active")
+        .slice(0, 6)
+        .map((project) => ({
+          id: project.id,
+          title: project.name,
+          subtitle: project.clientId
+            ? clientNameById.get(project.clientId) ?? "Unknown client"
+            : "Unassigned"
+        })),
+    [localProjects, clientNameById]
+  );
 
   // `now` stays null through SSR and the first client render so the clock never
   // causes a hydration mismatch; the effect above fills it in and ticks it.
@@ -709,23 +781,25 @@ export function OwnerDashboard({ version }: { version: string }) {
         eyebrow="Execute / active work"
         dragLabel="Projects"
         loadingLabel="Loading projects"
-        items={dashboardData?.projects ?? []}
-        loading={loadingDashboard}
-        error={dashboardError}
-        source={dashboardData?.source}
+        emptyLabel="No active projects yet — add one on the Projects page."
+        items={projectChips}
+        loading={loadingEntities}
+        error={entitiesError}
+        manageHref="/projects"
         collapseProps={collapseProps("activeProjects")}
       />
     ),
     clients: (
       <CollectionCard
         title="Clients"
-        eyebrow="Pipeline / won"
+        eyebrow="CRM / owned locally"
         dragLabel="Clients"
         loadingLabel="Loading clients"
-        items={dashboardData?.clients ?? []}
-        loading={loadingDashboard}
-        error={dashboardError}
-        source={dashboardData?.source}
+        emptyLabel="No clients yet — add one on the Clients page."
+        items={clientChips}
+        loading={loadingEntities}
+        error={entitiesError}
+        manageHref="/clients"
         collapseProps={collapseProps("clients")}
       />
     ),

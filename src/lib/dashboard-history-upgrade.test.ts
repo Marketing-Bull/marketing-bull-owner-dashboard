@@ -91,12 +91,12 @@ describe("existing database without daily_history", () => {
     );
     expect(loadHistory("2026-08-12").map((entry) => entry.dailyWin)).toEqual(["kept win"]);
 
-    // The runner adopted the legacy file: baseline recorded, rows intact.
+    // The runner adopted the legacy file: every migration recorded, rows intact.
     const upgraded = new DatabaseSync(join(root, "data", "dashboard.sqlite"));
     const recorded = upgraded
       .prepare("SELECT id FROM schema_migrations ORDER BY id")
       .all() as Array<{ id: string }>;
-    expect(recorded.map((row) => row.id)).toEqual(["001-baseline"]);
+    expect(recorded.map((row) => row.id)).toEqual(["001-baseline", "002-clients-projects"]);
     upgraded.close();
 
     // And the first save also produced the day's backup next to the database.
