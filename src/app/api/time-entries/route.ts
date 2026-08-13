@@ -3,29 +3,34 @@ import { getDatabase } from "@/lib/dashboard-state";
 import {
   createTimeEntry,
   getRecentTimeEntryDefaults,
-  listTimeEntries,
+  parseTimeEntryQuery,
+  queryTimeEntries,
   TimeEntryValidationError
 } from "@/lib/time-entries";
+import { TransactionQueryValidationError } from "@/lib/transaction-query";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
     const params = new URL(request.url).searchParams;
-    const from = params.get("from") || undefined;
-    const to = params.get("to") || undefined;
-    const limitValue = params.get("limit");
-    const limit = limitValue == null ? undefined : Number(limitValue);
     const db = getDatabase();
+    const result = queryTimeEntries(db, parseTimeEntryQuery(params));
     return NextResponse.json(
       {
-        timeEntries: listTimeEntries(db, { from, to, limit }),
+        ...result,
+        // Temporary compatibility for the current Time screen. The redesigned
+        // ledger consumes `items` directly.
+        timeEntries: result.items,
         recentDefaults: getRecentTimeEntryDefaults(db)
       },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
-    const status = error instanceof TimeEntryValidationError ? 400 : 500;
+    const status =
+      error instanceof TimeEntryValidationError || error instanceof TransactionQueryValidationError
+        ? 400
+        : 500;
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },
       { status }

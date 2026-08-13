@@ -4,6 +4,26 @@ import type { DatabaseSync } from "node:sqlite";
 import { getClient, getProject, newEntityId } from "@/lib/entities";
 import { isDateKey } from "@/lib/time-entries";
 import {
+  addInFilter,
+  addLikeFilter,
+  assertRange,
+  booleanParam,
+  countRows,
+  dateParam,
+  enumListParam,
+  facetCounts,
+  listParam,
+  makePageInfo,
+  numberParam,
+  pageParams,
+  sortParams,
+  textParam,
+  type FacetCount,
+  type QueryScalar,
+  type SortDirection,
+  type TransactionQueryResult
+} from "@/lib/transaction-query";
+import {
   EXPENSE_FREQUENCIES,
   EXPENSE_KINDS,
   RECURRING_EXPENSE_STATUSES,
@@ -19,6 +39,89 @@ import {
 type Row = Record<string, unknown>;
 
 export class ExpenseValidationError extends Error {}
+
+export const EXPENSE_SORTS = [
+  "date",
+  "amount",
+  "kind",
+  "category",
+  "company",
+  "vendor",
+  "details",
+  "accountCode",
+  "billable",
+  "reimbursable",
+  "recurring",
+  "paymentMethod",
+  "status",
+  "annualizedAmount",
+  "createdAt",
+  "updatedAt"
+] as const;
+
+export type ExpenseSort = (typeof EXPENSE_SORTS)[number];
+
+export type ExpenseQuery = {
+  page: number;
+  pageSize: number;
+  sort: ExpenseSort;
+  direction: SortDirection;
+  id?: string;
+  mcId?: number;
+  search?: string;
+  from?: string;
+  to?: string;
+  clientIds?: string[];
+  projectIds?: string[];
+  recurringExpenseIds?: string[];
+  amountMin?: number;
+  amountMax?: number;
+  kinds?: ExpenseKind[];
+  categories?: string[];
+  companies?: string[];
+  vendor?: string;
+  details?: string;
+  accountCodes?: string[];
+  billable?: boolean;
+  reimbursable?: boolean;
+  recurring?: ExpenseFrequency[];
+  recurringDayMin?: number;
+  recurringDayMax?: number;
+  paymentMethods?: string[];
+  statuses?: string[];
+  tags?: string;
+  receiptAttached?: boolean;
+  receiptName?: string;
+  annualizedMin?: number;
+  annualizedMax?: number;
+  createdFrom?: string;
+  createdTo?: string;
+  updatedFrom?: string;
+  updatedTo?: string;
+};
+
+export type ExpenseQueryTotals = {
+  records: number;
+  expenses: number;
+  income: number;
+  reimbursable: number;
+  net: number;
+};
+
+export type ExpenseQueryFacets = {
+  clients: FacetCount[];
+  projects: FacetCount[];
+  kinds: FacetCount[];
+  categories: FacetCount[];
+  companies: FacetCount[];
+  accountCodes: FacetCount[];
+  paymentMethods: FacetCount[];
+  statuses: FacetCount[];
+  recurring: FacetCount[];
+  billable: FacetCount[];
+  reimbursable: FacetCount[];
+  receipts: FacetCount[];
+};
 
 export const SUGGESTED_EXPENSE_CATEGORIES = [
   "Software",
@@ -291,6 +394,197 @@ export function listExpenses(db: DatabaseSync, options: { from?: string; to?: st
   params.push(limit);
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   return (db.prepare(`SELECT * FROM expenses ${where} ORDER BY date DESC, created_at DESC LIMIT ?`).all(...params) as Row[]).map(rowToExpense);
+}
+
+const ANNUALIZED_EXPENSE_SQL = `(CASE recurring
+  WHEN 'weekly' THEN amount * 52
+  WHEN 'monthly' THEN amount * 12
+  WHEN 'quarterly' THEN amount * 4
+  WHEN 'yearly' THEN amount
+  ELSE NULL END)`;
+
+export function parseExpenseQuery(params: URLSearchParams): ExpenseQuery {
+  const query: ExpenseQuery = {
+    ...pageParams(params),
+    ...sortParams(params, EXPENSE_SORTS, "date"),
+    id: textParam(params, "id", { maxLength: 80 }),
+    mcId: numberParam(params, "mcId", { min: 0, integer: true }),
+    search: textParam(params, "search"),
+    from: dateParam(params, "from"),
+    to: dateParam(params, "to"),
+    clientIds: listParam(params, "clientId"),
+    projectIds: listParam(params, "projectId"),
+    recurringExpenseIds: listParam(params, "recurringExpenseId"),
+    amountMin: numberParam(params, "amountMin", { min: 0 }),
+    amountMax: numberParam(params, "amountMax", { min: 0 }),
+    kinds: enumListParam(params, "kind", EXPENSE_KINDS),
+    categories: listParam(params, "category"),
+    companies: listParam(params, "company"),
+    vendor: textParam(params, "vendor"),
+    details: textParam(params, "details"),
+    accountCodes: listParam(params, "accountCode"),
+    billable: booleanParam(params, "billable"),
+    reimbursable: booleanParam(params, "reimbursable"),
+    recurring: enumListParam(params, "recurring", EXPENSE_FREQUENCIES),
+    recurringDayMin: numberParam(params, "recurringDayMin", { min: 1, max: 31, integer: true }),
+    recurringDayMax: numberParam(params, "recurringDayMax", { min: 1, max: 31, integer: true }),
+    paymentMethods: listParam(params, "paymentMethod"),
+    statuses: listParam(params, "status"),
+    tags: textParam(params, "tags"),
+    receiptAttached: booleanParam(params, "receiptAttached"),
+    receiptName: textParam(params, "receiptName"),
+    annualizedMin: numberParam(params, "annualizedMin", { min: 0 }),
+    annualizedMax: numberParam(params, "annualizedMax", { min: 0 }),
+    createdFrom: dateParam(params, "createdFrom"),
+    createdTo: dateParam(params, "createdTo"),
+    updatedFrom: dateParam(params, "updatedFrom"),
+    updatedTo: dateParam(params, "updatedTo")
+  };
+  assertRange(query.from, query.to, "Date");
+  assertRange(query.amountMin, query.amountMax, "Amount");
+  assertRange(query.recurringDayMin, query.recurringDayMax, "Recurring day");
+  assertRange(query.annualizedMin, query.annualizedMax, "Annualized amount");
+  assertRange(query.createdFrom, query.createdTo, "Created date");
+  assertRange(query.updatedFrom, query.updatedTo, "Updated date");
+  return query;
+}
+
+function expenseWhere(query: ExpenseQuery): { where: string; params: QueryScalar[] } {
+  const clauses: string[] = [];
+  const params: QueryScalar[] = [];
+  const exact = (column: string, value: QueryScalar | undefined) => {
+    if (value === undefined) return;
+    clauses.push(`${column} = ?`);
+    params.push(value);
+  };
+  const minimum = (column: string, value: QueryScalar | undefined) => {
+    if (value === undefined) return;
+    clauses.push(`${column} >= ?`);
+    params.push(value);
+  };
+  const maximum = (column: string, value: QueryScalar | undefined) => {
+    if (value === undefined) return;
+    clauses.push(`${column} <= ?`);
+    params.push(value);
+  };
+
+  exact("id", query.id);
+  exact("mc_id", query.mcId);
+  minimum("date", query.from);
+  maximum("date", query.to);
+  addInFilter(clauses, params, "client_id", query.clientIds);
+  addInFilter(clauses, params, "project_id", query.projectIds);
+  addInFilter(clauses, params, "recurring_expense_id", query.recurringExpenseIds);
+  minimum("amount", query.amountMin);
+  maximum("amount", query.amountMax);
+  addInFilter(clauses, params, "kind", query.kinds);
+  addInFilter(clauses, params, "category", query.categories);
+  addInFilter(clauses, params, "company", query.companies);
+  addLikeFilter(clauses, params, "vendor", query.vendor);
+  addLikeFilter(clauses, params, "details", query.details);
+  addInFilter(clauses, params, "account_code", query.accountCodes);
+  exact("billable", query.billable === undefined ? undefined : query.billable ? 1 : 0);
+  exact("reimbursable", query.reimbursable === undefined ? undefined : query.reimbursable ? 1 : 0);
+  addInFilter(clauses, params, "recurring", query.recurring);
+  minimum("recurring_day", query.recurringDayMin);
+  maximum("recurring_day", query.recurringDayMax);
+  addInFilter(clauses, params, "payment_method", query.paymentMethods);
+  addInFilter(clauses, params, "status", query.statuses);
+  addLikeFilter(clauses, params, "tags", query.tags);
+  addLikeFilter(clauses, params, "receipt_name", query.receiptName);
+  minimum(ANNUALIZED_EXPENSE_SQL, query.annualizedMin);
+  maximum(ANNUALIZED_EXPENSE_SQL, query.annualizedMax);
+  if (query.receiptAttached !== undefined) {
+    clauses.push(
+      query.receiptAttached
+        ? "receipt_name IS NOT NULL AND receipt_name <> ''"
+        : "(receipt_name IS NULL OR receipt_name = '')"
+    );
+  }
+  addLikeFilter(
+    clauses,
+    params,
+    "category || ' ' || company || ' ' || vendor || ' ' || details || ' ' || payment_method || ' ' || status || ' ' || tags || ' ' || COALESCE(account_code, '')",
+    query.search
+  );
+  minimum("SUBSTR(created_at, 1, 10)", query.createdFrom);
+  maximum("SUBSTR(created_at, 1, 10)", query.createdTo);
+  minimum("SUBSTR(updated_at, 1, 10)", query.updatedFrom);
+  maximum("SUBSTR(updated_at, 1, 10)", query.updatedTo);
+  return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
+}
+
+export function queryExpenses(
+  db: DatabaseSync,
+  query: ExpenseQuery
+): TransactionQueryResult<Expense, ExpenseQueryTotals, ExpenseQueryFacets> {
+  const { where, params } = expenseWhere(query);
+  const totalItems = countRows(db, "expenses", where, params);
+  const sortColumns: Record<ExpenseSort, string> = {
+    date: "date",
+    amount: "amount",
+    kind: "kind",
+    category: "category COLLATE NOCASE",
+    company: "company COLLATE NOCASE",
+    vendor: "vendor COLLATE NOCASE",
+    details: "details COLLATE NOCASE",
+    accountCode: "account_code",
+    billable: "billable",
+    reimbursable: "reimbursable",
+    recurring: "recurring",
+    paymentMethod: "payment_method COLLATE NOCASE",
+    status: "status COLLATE NOCASE",
+    annualizedAmount: ANNUALIZED_EXPENSE_SQL,
+    createdAt: "created_at",
+    updatedAt: "updated_at"
+  };
+  const direction = query.direction.toUpperCase();
+  const offset = (query.page - 1) * query.pageSize;
+  const rows = db
+    .prepare(`SELECT * FROM expenses ${where}
+      ORDER BY ${sortColumns[query.sort]} ${direction}, created_at ${direction}, id ${direction}
+      LIMIT ? OFFSET ?`)
+    .all(...params, query.pageSize, offset) as Row[];
+  const totals = db.prepare(`SELECT
+      COUNT(*) AS records,
+      COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0) AS expenses,
+      COALESCE(SUM(CASE WHEN kind = 'income' THEN amount ELSE 0 END), 0) AS income,
+      COALESCE(SUM(CASE WHEN kind = 'expense' AND reimbursable = 1 THEN amount ELSE 0 END), 0) AS reimbursable
+    FROM expenses ${where}`).get(...params) as Record<string, number>;
+  const expenses = Number(totals.expenses);
+  const income = Number(totals.income);
+  return {
+    items: rows.map(rowToExpense),
+    pageInfo: makePageInfo(query.page, query.pageSize, totalItems),
+    filteredTotals: {
+      records: Number(totals.records),
+      expenses,
+      income,
+      reimbursable: Number(totals.reimbursable),
+      net: income - expenses
+    },
+    availableFacets: {
+      clients: facetCounts(db, "expenses", "COALESCE(client_id, '__unassigned__')", where, params),
+      projects: facetCounts(db, "expenses", "COALESCE(project_id, '__unassigned__')", where, params),
+      kinds: facetCounts(db, "expenses", "kind", where, params),
+      categories: facetCounts(db, "expenses", "category", where, params),
+      companies: facetCounts(db, "expenses", "company", where, params),
+      accountCodes: facetCounts(db, "expenses", "account_code", where, params),
+      paymentMethods: facetCounts(db, "expenses", "payment_method", where, params),
+      statuses: facetCounts(db, "expenses", "status", where, params),
+      recurring: facetCounts(db, "expenses", "recurring", where, params),
+      billable: facetCounts(db, "expenses", "billable", where, params, { includeEmpty: true }),
+      reimbursable: facetCounts(db, "expenses", "reimbursable", where, params, { includeEmpty: true }),
+      receipts: facetCounts(
+        db,
+        "expenses",
+        "CASE WHEN receipt_name IS NOT NULL AND receipt_name <> '' THEN 'attached' ELSE 'missing' END",
+        where,
+        params,
+        { includeEmpty: true }
+      )
+    }
+  };
 }
 
 function validatedExpense(db: DatabaseSync, input: ExpenseInput) {
