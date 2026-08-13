@@ -7,8 +7,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, LoaderCircle, Plus } from "lucide-react";
+import { LoaderCircle, Plus } from "lucide-react";
 import styles from "../entities.module.css";
 import { PROJECT_STATUSES, type Client, type Project, type ProjectStatus } from "@/lib/types";
 
@@ -234,10 +233,6 @@ export default function ProjectsPage() {
             <h1 className={styles.title}>Projects</h1>
           </div>
           <div className={styles.headerActions}>
-            <Link href="/" className={`${styles.button} ${styles.buttonQuiet}`}>
-              <ArrowLeft size={14} /> Dashboard
-            </Link>
-            <Link href="/clients" className={`${styles.button} ${styles.buttonQuiet}`}>Clients</Link>
             <label className={styles.toggleRow}>
               <input
                 type="checkbox"
