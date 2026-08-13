@@ -236,6 +236,130 @@ Prefer native platform features and the existing React/Next.js/CSS stack. Add a 
 - Add analytics-free operational checks: API timing logs and error visibility are sufficient for this private dashboard.
 - Release behind a per-screen feature flag or in Time -> Expenses -> Mileage order, with the existing screens available for rollback until each conversion is accepted.
 
+## Execution and recovery playbook
+
+### Branch and pull-request strategy
+
+Execute the redesign as small, ordered pull requests into `preview`; do not implement all phases in one long-lived branch. Suggested PR sequence:
+
+1. `redesign/01-query-contracts`
+2. `redesign/02-shared-ledger-ui`
+3. `redesign/03-time-pilot`
+4. `redesign/04-expenses-ledger`
+5. `redesign/05-mileage-ledger`
+6. `redesign/06-maps-adapter`
+7. `redesign/07-dropdown-settings`
+8. `redesign/08-hardening-release`
+
+Each branch starts from the latest `preview`, contains one independently reviewable concern, and includes migrations/tests required by that concern. Merge only after CI, review, and a preview smoke test pass. After each merge, rebase or recreate the next branch from the new `preview` rather than carrying a deep stack of stale branches.
+
+Each PR description must include scope, schema/API changes, screenshots at desktop and mobile widths, test evidence, feature-flag state, migration/rollback notes, and known limitations. Keep a checklist in the PR so another agent or developer can resume without relying on chat history.
+
+### Per-PR execution loop
+
+1. **Preflight**: pull `preview`, confirm a clean worktree, record the starting commit, inspect open PRs, run the baseline test/build suite, and back up a representative database.
+2. **Contract first**: write or update types, request/response contracts, migrations, and acceptance tests before wiring the final UI.
+3. **Implement narrowly**: touch only the current phase; place incomplete user-facing behavior behind a default-off feature flag.
+4. **Verify locally**: lint, type-check, unit/integration tests, production build, migration test on both fresh and copied databases, and focused browser checks.
+5. **Stress the change**: run seeded-volume queries and mobile viewport checks appropriate to the phase.
+6. **Commit checkpoints**: create coherent commits after schema/API, UI, and tests so a failed approach can be reverted selectively.
+7. **Open PR and preview**: deploy or run from the PR branch, complete the manual smoke checklist, and attach evidence.
+8. **Merge and observe**: merge into `preview`, redeploy, verify health and key CRUD operations, then observe logs and response times before starting the next phase.
+
+### Required gates
+
+Work stops at a gate when its criteria fail; later phases do not paper over earlier defects.
+
+- **Baseline gate**: existing tests and build pass before implementation. If not, document the pre-existing failure and either repair it in a separate PR or obtain an explicit exception.
+- **Data gate**: migrations succeed on a new database and a scrubbed copy of the current database; row counts and sampled totals match before/after.
+- **API gate**: invalid filters are rejected predictably, pagination has no duplicates/gaps, totals use the identical filter predicate, and typical queries meet the performance target.
+- **UX gate**: common CRUD flows pass at 320, 375, 430, 768, and desktop widths; keyboard and focus behavior pass; loading, empty, no-results, error, and offline/interrupted states are usable.
+- **Maps gate**: manual mileage works with maps disabled, credentials absent, quota exhausted, provider returning errors, and network requests timing out.
+- **Release gate**: current and redesigned screens can be switched independently, database backups are current, rollback steps have been rehearsed, and preview smoke tests pass.
+
+### Feature flags and safe rollout
+
+Use server-owned per-screen flags such as `transactionLedger.time`, `transactionLedger.expenses`, `transactionLedger.mileage`, `maps.enabled`, and `dropdownSettings.enabled`. Defaults stay off until the corresponding preview gate passes. Flags select UI/routes, not schema versions; all deployed code must safely tolerate the latest migrated schema whether a flag is on or off.
+
+Roll out Time first to preview, then Expenses, then Mileage without maps, then maps, then editable dropdowns. Enable one flag at a time. Keep the previous screen reachable for at least one acceptance cycle. Once a new screen is accepted and stable, remove its old implementation in a separate cleanup PR rather than during rollout.
+
+### Database migration safety
+
+- Migrations are forward-only, idempotently tracked, and additive during the rollout window. Do not drop or rename existing columns while the old screens remain available.
+- Before a migration, stop writes or use the application's existing consistent backup mechanism; record backup path, size, timestamp, and checksum.
+- Test upgrade from the oldest supported live schema, the current live copy, and a fresh database.
+- Verify migrations with row counts, null/constraint checks, orphan checks, and domain totals for Time, Expenses, and Mileage.
+- For backfills, use deterministic batches with a persisted checkpoint and progress counts. Re-running a batch must not duplicate or corrupt data.
+- If a migration fails before commit, abort the transaction and leave the prior schema usable. If validation fails after commit, disable the affected feature flag and restore the verified backup before allowing writes.
+- Never claim rollback by running an untested down migration. The recovery path is old UI plus compatible additive schema, or database restore when data changed incorrectly.
+
+### Failure classification and response
+
+| Failure | Automatic behavior | Operator action | Resume point |
+| --- | --- | --- | --- |
+| Build, lint, type, or test failure | Stop the PR; no deploy | Fix in the same phase or revert the offending checkpoint | Re-run the full phase gate |
+| Preview deploy fails | Keep the last healthy preview process | Inspect build/runtime logs; redeploy the last known-good commit if needed | Failed deployment commit |
+| Migration fails | Roll back its transaction; keep feature flag off | Preserve logs, verify database integrity, fix migration against a copy | Migration preflight |
+| CRUD regression or incorrect totals | Disable the affected screen flag | Capture reproducible filters/record IDs, compare old/new APIs, fix and retest | Affected phase PR |
+| Slow queries or memory pressure | Enforce page-size cap; cancel/timeout request | Inspect query plan, add measured index or revise predicate | API performance gate |
+| Receipt upload interruption | Preserve unsaved form; expose Retry | Check storage/disk limits and upload logs | Upload step only |
+| Maps timeout, outage, bad route, or missing credentials | Stop retries quickly and expose manual miles | Test provider status/configuration; leave maps flag off if systemic | Distance calculation only |
+| Maps quota or rate limit | Serve fresh cached routes; suspend live calls; show manual fallback | Review usage and limits; do not purchase capacity without approval | When quota window resets or provider changes |
+| Dropdown option conflict or unsafe removal | Reject mutation; leave existing option active | Resolve duplicates/usages or select replacement explicitly | Settings mutation |
+| Bad release after merge | Turn off affected flags and deploy last known-good app commit | Restore DB only if data validation shows corruption | Last completed gate |
+
+### External API usage limits and provider resilience
+
+- The maps adapter owns a request budget per minute and per day below the provider's hard limits. Reject or defer calls before crossing the configured budget.
+- Autocomplete starts only after a minimum character count, debounces input, cancels stale requests, limits results, and uses provider session tokens when supported.
+- Distance calculation occurs only when both validated endpoints are present or the user taps Recalculate; never call on every keystroke.
+- Cache autocomplete briefly and route distances longer using normalized keys. Track cache hit rate, request count, latency, timeout count, provider status class, and remaining configured budget without logging addresses.
+- Retry only transient failures (`429`, selected `5xx`, network timeout) with bounded exponential backoff and jitter: at most two automatic retries for an interactive request. Honor `Retry-After`. Do not retry invalid input, authentication failures, or no-route responses.
+- Use a circuit breaker: after a configurable number of recent provider failures, stop live calls for a cooling period and immediately offer manual entry. A successful health probe closes the circuit.
+- Provider selection remains behind the adapter. Adding a second provider is allowed after the preflight, but automatic failover must be opt-in because route results, privacy terms, and billing can differ.
+- Usage-limit warnings appear in Settings at configurable thresholds such as 70%, 90%, and exhausted. Exhaustion disables calculation, not mileage CRUD.
+- No code path may automatically upgrade a plan, enable billing, or send requests to a new provider without explicit approval and configured credentials.
+
+### Resumability and work-state recording
+
+At the end of every work session or failed attempt, update the active PR checklist with:
+
+- last known-good commit and preview URL/process
+- completed and failing gates
+- exact failing command or request, sanitized error, and reproduction steps
+- migration applied/not applied and backup identifier
+- feature-flag values
+- provider usage/circuit state if maps are involved
+- next smallest action
+
+Do not store secrets, full addresses, receipts, access tokens, or copied production rows in PR descriptions or logs. A new operator should be able to continue from the branch, PR checklist, test output, and backup identifier alone.
+
+### Observability and health checks
+
+- Add structured logs for endpoint name, result status, duration, page size, and anonymous filter count; exclude filter values that can contain client or address data.
+- Expose or log migration version, enabled feature flags, database reachability, and maps adapter state (`disabled`, `healthy`, `limited`, `open-circuit`) in an operator-safe health check.
+- Alerting can remain lightweight for this private deployment, but the post-deploy checklist must inspect error logs, p95 query time, maps failures/limits, and disk space for database backups and receipts.
+- Define last-known-good as a specific commit plus validated database backup, not simply “the previous deployment.”
+
+### Rollback runbook
+
+1. Stop new work and record the observed failure and current commit.
+2. Disable only the affected feature flag when possible; verify the legacy screen and CRUD path.
+3. If the process is unhealthy, deploy the recorded last-known-good application commit.
+4. Check database integrity and domain totals. Do not restore merely because the UI failed.
+5. If data or schema validation failed, stop writes, preserve the faulty database for diagnosis, restore the verified pre-migration backup, and restart on compatible code.
+6. Verify login, list, add, edit, and delete for the affected domain; verify totals and Settings load.
+7. Record the incident, root cause, recovery commit/backup, and preventive test before resuming development.
+
+### Definition of done for the execution program
+
+- All eight PRs (or equivalently scoped replacements) are merged into `preview` with their gates documented.
+- Each redesigned screen passes its acceptance criteria with its legacy flag fallback tested.
+- Backup/restore and application rollback have been rehearsed against non-production copies.
+- Manual mileage entry succeeds during simulated maps timeouts, `401`, `429`, `5xx`, quota exhaustion, and open-circuit states.
+- No external-service spend was enabled without explicit approval.
+- Preview remains stable through an acceptance period with no unexplained data-count/total changes before promotion beyond `preview`.
+
 ## Acceptance criteria
 
 - Every transaction field is filterable; common filters are visible at the top and secondary filters are reachable in one action.
