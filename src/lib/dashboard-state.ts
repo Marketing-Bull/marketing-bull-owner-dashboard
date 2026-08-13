@@ -15,7 +15,8 @@ import {
   shiftDayKey,
   todayKey
 } from "@/lib/history";
-import { runMigrations, type Migration } from "@/lib/migrations";
+import { runMigrations } from "@/lib/migrations";
+import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
 import type { HistoryEntry, ManualState, PhoneCallItem } from "@/lib/types";
 
@@ -48,73 +49,11 @@ type DashboardStateRow = {
 let database: DatabaseSync | null = null;
 
 /**
- * The schema, as an ordered migration list (see `@/lib/migrations`).
- *
- * `001-baseline` is written idempotently — IF NOT EXISTS plus a conditional
- * column add — because it has to adopt live databases created across three
- * earlier schema generations (pre-`collapsed_json`, pre-`daily_history`, and
- * current) as well as build a fresh file. It is the only migration allowed
- * that shape: everything after it runs against a known state and must be a
- * plain, run-once migration.
+ * The one shared connection, migrated on first open. Exported so the entity
+ * routes (clients, projects) run against the same database and migration
+ * state as the dashboard state itself. The schema lives in `@/lib/schema`.
  */
-const DASHBOARD_MIGRATIONS: Migration[] = [
-  {
-    id: "001-baseline",
-    up: (db) => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS dashboard_state (
-          id INTEGER PRIMARY KEY CHECK (id = 1),
-          goals_json TEXT NOT NULL,
-          mrr_current TEXT NOT NULL,
-          mrr_projected TEXT NOT NULL,
-          mrr_mom_delta TEXT NOT NULL,
-          whats_important TEXT NOT NULL,
-          hyperfocus_json TEXT NOT NULL,
-          widget_order_json TEXT NOT NULL,
-          collapsed_json TEXT NOT NULL DEFAULT '[]',
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS phone_calls (
-          id TEXT PRIMARY KEY,
-          column_name TEXT NOT NULL CHECK (column_name IN ('toMake', 'made')),
-          sort_order INTEGER NOT NULL,
-          name TEXT NOT NULL,
-          number TEXT NOT NULL,
-          checked INTEGER NOT NULL DEFAULT 0
-        );
-
-        -- One row per local calendar day. dashboard_state holds only the
-        -- current values (id = 1), so before this table every save erased the
-        -- day before it and nothing could be counted or looked back at.
-        CREATE TABLE IF NOT EXISTS daily_history (
-          day TEXT PRIMARY KEY,
-          daily_win TEXT NOT NULL,
-          lens TEXT NOT NULL,
-          target TEXT NOT NULL,
-          bottleneck TEXT NOT NULL,
-          mrr_current TEXT NOT NULL,
-          mrr_projected TEXT NOT NULL,
-          mrr_mom_delta TEXT NOT NULL,
-          goals_json TEXT NOT NULL,
-          whats_important TEXT NOT NULL,
-          calls_made INTEGER NOT NULL,
-          calls_planned INTEGER NOT NULL,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-
-      // Databases created before collapsed_json existed lack the column, and
-      // CREATE TABLE IF NOT EXISTS above is a no-op against them.
-      const columns = db.prepare("PRAGMA table_info(dashboard_state)").all() as Array<{ name?: unknown }>;
-      if (!columns.some((column) => String(column.name) === "collapsed_json")) {
-        db.exec("ALTER TABLE dashboard_state ADD COLUMN collapsed_json TEXT NOT NULL DEFAULT '[]'");
-      }
-    }
-  }
-];
-
-function getDatabase(): DatabaseSync {
+export function getDatabase(): DatabaseSync {
   if (database) return database;
 
   const path = databasePath();

@@ -102,8 +102,6 @@ export function normalizeDashboardData(value: unknown): DashboardData {
 
   return {
     priorities: normalizePriorities(root.priorities),
-    projects: Array.isArray(root.projects) ? root.projects.map(normalizeProject) : [],
-    clients: Array.isArray(root.clients) ? root.clients.map(normalizeProject) : [],
     hours: {
       week: normalizeHoursEntries(hours.week),
       month: normalizeHoursEntries(hours.month)

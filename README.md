@@ -15,13 +15,18 @@ Standalone daily owner dashboard for Alex.
 The app has 3 data layers:
 
 1. `Live external data`
-- ClickUp powers `Eisenhower Matrix`, `Projects`, `Clients`, `Up Next`, and `Hours by Project`
+- ClickUp powers `Eisenhower Matrix`, `Up Next`, and `Hours by Project`
 - Google Calendar powers the `Calendar` widget
 
-2. `Local persistent dashboard state`
-- Stored in SQLite at `data/dashboard.sqlite`
+2. `Local persistent dashboard state` — the system of record
+- Stored in SQLite at `data/dashboard.sqlite` (or `OWNER_DASHBOARD_DB_PATH`)
 - Shared across browsers/devices that hit the same running app
 - Powers:
+  - **`Clients` and `Projects` — real entities as of consolidation phase 2**,
+    with full CRUD at `/clients` and `/projects`, statuses, rates, billing
+    fields, and archive instead of delete. The dashboard widgets are a glance
+    at them; the pages are the management surface. Imported once from
+    mission-control (see below); no longer read from ClickUp lists
   - `MRR`
   - `Hyperfocus` / 4-step system fields
   - `Goals`
@@ -109,13 +114,38 @@ without credentials means the explicit opt-out is active.
 - The first save of each local day snapshots the database to `backups/` first
 - Gated the same way as the GET
 
+### `GET /api/clients` · `POST /api/clients` · `GET|PUT|DELETE /api/clients/{id}`
+- The Clients entity: list (`?includeArchived=1` to include archived), create,
+  read, update. DELETE archives — hard deletion does not exist, because time
+  entries and expenses will hang off these rows from phase 3 on
+- Validation errors return 400 with a message; unknown ids 404
+
+### `GET /api/projects` · `POST /api/projects` · `GET|PUT|DELETE /api/projects/{id}`
+- Same shape as clients. A project may belong to a client (`clientId`) or be
+  unassigned; carries `hourlyRateOverride` (beats the client rate),
+  `status` (`active | on_hold | completed`), and the `urgent`/`important`
+  Eisenhower axes for phase 6
+
+### `POST /api/admin/import-mission-control`
+- Body: `{ "sourcePath": "/path/to/AMB-mission-control.db" }` — a file already
+  on the server
+- Imports clients and projects with the cleaning rules from the scope doc
+  (status normalization, 0-means-unset money fields, soft-deleted projects
+  skipped, dangling client links imported unassigned), each fix-up reported in
+  `warnings`
+- **Idempotent**: every imported row keeps its mission-control id in `mcId`,
+  and re-running upserts by it — a fresher MC copy converges instead of
+  duplicating
+- Refuses to run (403) unless a real auth token is configured, on top of the
+  normal gate: an open deployment must not expose an endpoint that reads
+  server-side files
+
 ### `GET /api/dashboard`
 - If `OWNER_DASHBOARD_DATA_URL` is set, proxies that upstream endpoint
 - Otherwise fetches live ClickUp data directly (API key read from `~/.openclaw/secrets.json` → `env.CLICKUP_API_KEY`)
-- The default ClickUp sources are:
-  - `Eisenhower Matrix`: team-wide assigned tasks ranked into P0-P3 buckets
-  - `Projects`: list `901114301312`
-  - `Clients`: list `901112740853`, filtered to `Won`
+- ClickUp sources: `Eisenhower Matrix` and `Up Next` (team-wide assigned tasks)
+  plus time entries for `Hours by Project`. The old Projects/Clients list
+  fetches — and their hardcoded list ids — are gone as of phase 2
 - Falls back to sample data only if live fetch fails, and always reports why: the failure is logged server-side and returned as `fallbackReason`, which the UI shows as a "these numbers are not real" banner
 - Proxied and live payloads are both normalized, so a drifting upstream cannot crash the page
 - `Up Next` is currently ranked against the saved `lens`, `target`, and `bottleneck`, with due date and priority still influencing ranking
@@ -281,6 +311,13 @@ bugs that actually shipped rather than at coverage for its own sake:
 - `dashboard-save.test.ts` — the autosave decision, in both directions.
 - `clickup.test.ts` — status selection for the write-back, weighted toward the
   refusal cases, since guessing a status would move a real task.
+- `entities.test.ts` — Clients/Projects CRUD against real SQLite: archive
+  never deletes, a project cannot point at a missing client, and rate
+  resolution (override → client → 0, with 0 treated as unset).
+- `mission-control-import.test.ts` — the import against a synthetic MC
+  database replicating the live file's dirty data: three status spellings, a
+  soft-deleted project, a dangling client link, a nameless row. Idempotence is
+  the property under test — a second run must converge, not duplicate.
 - `history.test.ts` — streak counting and day-key arithmetic, again across
   several timezones. Includes the DST transitions where midnight does not exist
   (`America/Santiago`, `Asia/Beirut`), because a day-shift anchored at midnight
@@ -343,12 +380,20 @@ ClickUp source ids when it stops being one.
 - `src/lib/clickup.ts`
 - `src/lib/dashboard-data.ts`
 - `src/lib/dashboard-layout.ts`
+- `src/app/clients/page.tsx`
+- `src/app/projects/page.tsx`
+- `src/app/api/clients/route.ts`
+- `src/app/api/projects/route.ts`
+- `src/app/api/admin/import-mission-control/route.ts`
 - `src/lib/backup.ts`
 - `src/lib/dashboard-state.ts`
+- `src/lib/entities.ts`
 - `src/lib/fallback.ts`
 - `src/lib/history.ts`
 - `src/lib/migrations.ts`
+- `src/lib/mission-control-import.ts`
 - `src/lib/sample-data.ts`
+- `src/lib/schema.ts`
 - `src/lib/types.ts`
 
 ## What Still Needs Improvement
