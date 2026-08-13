@@ -1,8 +1,12 @@
 name: CI
 
 on:
+  # The integration and release branches. `main` is retired -- it stopped
+  # moving at 46a0ee9 and carries nothing the others lack, so keeping it here
+  # meant every push to preview and stable landed with no CI at all. Pull
+  # requests are covered separately below, whatever their target.
   push:
-    branches: ["main"]
+    branches: ["preview", "stable"]
   pull_request:
   workflow_dispatch:
 
