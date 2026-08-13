@@ -104,6 +104,13 @@ export type MileageInput = {
   roundTrip?: boolean;
   billable?: boolean;
   notes?: string;
+  calculationSource?: "manual" | "provider";
+  calculationProvider?: string | null;
+  calculatedMiles?: number | null;
+  routeMetadataJson?: string | null;
+  calculatedAt?: string | null;
+  startPlaceId?: string | null;
+  endPlaceId?: string | null;
   mcId?: number;
   createdAt?: string;
 };
@@ -152,7 +159,15 @@ function rowToMileage(row: Row): MileageEntry {
     tripName: text(row.trip_name), date: String(row.date), startAddress: text(row.start_address),
     endAddress: text(row.end_address), purpose: text(row.purpose), miles: Number(row.miles),
     roundTrip: Boolean(row.round_trip), totalMiles: Number(row.total_miles), billable: Boolean(row.billable),
-    notes: typeof row.notes === "string" ? row.notes : "", createdAt: String(row.created_at), updatedAt: String(row.updated_at)
+    notes: typeof row.notes === "string" ? row.notes : "",
+    calculationSource: row.calculation_source === "provider" ? "provider" : "manual",
+    calculationProvider: row.calculation_provider == null ? null : String(row.calculation_provider),
+    calculatedMiles: row.calculated_miles == null ? null : Number(row.calculated_miles),
+    routeMetadataJson: row.route_metadata_json == null ? null : String(row.route_metadata_json),
+    calculatedAt: row.calculated_at == null ? null : String(row.calculated_at),
+    startPlaceId: row.start_place_id == null ? null : String(row.start_place_id),
+    endPlaceId: row.end_place_id == null ? null : String(row.end_place_id),
+    createdAt: String(row.created_at), updatedAt: String(row.updated_at)
   };
 }
 
@@ -334,12 +349,20 @@ export function createMileageEntry(db: DatabaseSync, input: MileageInput): Milea
   const value = validated(db, input);
   const id = newEntityId();
   const now = nowIso();
+  const calculationSource = input.calculationSource === "provider" ? "provider" : "manual";
   db.prepare(`INSERT INTO mileage_entries (id,mc_id,client_id,project_id,trip_name,date,start_address,
-    end_address,purpose,miles,round_trip,total_miles,billable,notes,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    end_address,purpose,miles,round_trip,total_miles,billable,notes,calculation_source,calculation_provider,
+    calculated_miles,route_metadata_json,calculated_at,start_place_id,end_place_id,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(id,input.mcId ?? null,value.clientId,value.projectId,text(input.tripName),value.date,
     text(input.startAddress),text(input.endAddress),text(input.purpose),value.miles,value.roundTrip ? 1 : 0,
-    value.totalMiles,input.billable ? 1 : 0,text(input.notes),input.createdAt ?? now,now);
+    value.totalMiles,input.billable ? 1 : 0,text(input.notes),calculationSource,
+    calculationSource === "provider" ? text(input.calculationProvider) || null : null,
+    calculationSource === "provider" && input.calculatedMiles != null ? finiteNumber(input.calculatedMiles, "Calculated miles") : null,
+    calculationSource === "provider" ? input.routeMetadataJson ?? null : null,
+    calculationSource === "provider" ? input.calculatedAt ?? now : null,
+    calculationSource === "provider" ? input.startPlaceId ?? null : null,
+    calculationSource === "provider" ? input.endPlaceId ?? null : null,input.createdAt ?? now,now);
   return getMileageEntry(db, id)!;
 }
 
@@ -353,14 +376,29 @@ export function updateMileageEntry(db: DatabaseSync, id: string, patch: Partial<
     startAddress: patch.startAddress ?? existing.startAddress, endAddress: patch.endAddress ?? existing.endAddress,
     purpose: patch.purpose ?? existing.purpose, miles: patch.miles ?? existing.miles,
     roundTrip: patch.roundTrip ?? existing.roundTrip, billable: patch.billable ?? existing.billable,
-    notes: patch.notes ?? existing.notes
+    notes: patch.notes ?? existing.notes,
+    calculationSource: patch.calculationSource ?? existing.calculationSource,
+    calculationProvider: patch.calculationProvider === undefined ? existing.calculationProvider : patch.calculationProvider,
+    calculatedMiles: patch.calculatedMiles === undefined ? existing.calculatedMiles : patch.calculatedMiles,
+    routeMetadataJson: patch.routeMetadataJson === undefined ? existing.routeMetadataJson : patch.routeMetadataJson,
+    calculatedAt: patch.calculatedAt === undefined ? existing.calculatedAt : patch.calculatedAt,
+    startPlaceId: patch.startPlaceId === undefined ? existing.startPlaceId : patch.startPlaceId,
+    endPlaceId: patch.endPlaceId === undefined ? existing.endPlaceId : patch.endPlaceId
   };
   const value = validated(db, input);
+  const calculationSource = input.calculationSource === "provider" ? "provider" : "manual";
   db.prepare(`UPDATE mileage_entries SET client_id=?,project_id=?,trip_name=?,date=?,start_address=?,
-    end_address=?,purpose=?,miles=?,round_trip=?,total_miles=?,billable=?,notes=?,updated_at=? WHERE id=?`
+    end_address=?,purpose=?,miles=?,round_trip=?,total_miles=?,billable=?,notes=?,calculation_source=?,
+    calculation_provider=?,calculated_miles=?,route_metadata_json=?,calculated_at=?,start_place_id=?,end_place_id=?,updated_at=? WHERE id=?`
   ).run(value.clientId,value.projectId,text(input.tripName),value.date,text(input.startAddress),
     text(input.endAddress),text(input.purpose),value.miles,value.roundTrip ? 1 : 0,value.totalMiles,
-    input.billable ? 1 : 0,text(input.notes),nowIso(),id);
+    input.billable ? 1 : 0,text(input.notes),calculationSource,
+    calculationSource === "provider" ? text(input.calculationProvider) || null : null,
+    calculationSource === "provider" ? input.calculatedMiles ?? null : null,
+    calculationSource === "provider" ? input.routeMetadataJson ?? null : null,
+    calculationSource === "provider" ? input.calculatedAt ?? nowIso() : null,
+    calculationSource === "provider" ? input.startPlaceId ?? null : null,
+    calculationSource === "provider" ? input.endPlaceId ?? null : null,nowIso(),id);
   return getMileageEntry(db, id)!;
 }
 
