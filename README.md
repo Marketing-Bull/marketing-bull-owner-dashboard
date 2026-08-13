@@ -2,6 +2,16 @@
 
 Standalone daily owner dashboard for Alex.
 
+## The Consolidation Plan
+
+The dashboard is mid-way through absorbing Recoup's and Mission Control's
+client / project / time / expense / mileage model and becoming the single
+system of record. The full scope — decisions, target schema, phase status —
+lives at [`docs/dashboard-consolidation-scope.html`](docs/dashboard-consolidation-scope.html)
+(open it in a browser). Phases 0–2 are done: migration runner, locked-capable
+auth, backups, and Clients + Projects as owned entities with the
+mission-control data imported. Next: time entry, then expenses and mileage.
+
 ## What It Is
 
 - Lightweight Next.js app with one main dashboard screen
@@ -68,11 +78,18 @@ Access is gated in `src/proxy.ts`. Three states:
 | `OWNER_DASHBOARD_ALLOW_UNPROTECTED=1`, no token | The old open behavior, chosen explicitly: anyone who can reach the address can read and edit everything, and the header shows an "Unprotected" chip. For a laptop, not for anything other machines can reach. |
 
 Locked became the default in consolidation phase 1: this store holds MRR,
-projections, goals, and client phone numbers today, and is about to hold client
-rates and financial entries. An unconfigured deployment quietly serving all of
-that is the failure mode; now it cannot.
+projections, goals, client contact details and rates. An unconfigured
+deployment quietly serving all of that is the failure mode; now it cannot —
+running open has to be said out loud.
 
-To unlock, set the variable and restart:
+**Current posture: said out loud.** The repo commits a `.env` with
+`OWNER_DASHBOARD_ALLOW_UNPROTECTED=1`, by the owner's explicit choice: deploys
+are `git pull` + restart with no login step, and the header wears the
+"Unprotected" chip the whole time. A configured token always beats the
+opt-out, so locking later is one step — set the token (below) or delete
+`.env`.
+
+To lock, set the variable and restart:
 
 ```bash
 # in the project root; .env.local is gitignored
@@ -208,6 +225,18 @@ Upgrading an existing database needs no manual step: opening it runs any
 pending migrations, and history simply starts from the first save after the
 upgrade.
 
+### First-boot seed
+
+A fresh database comes up already holding the clients and projects imported
+from mission-control (`src/lib/entity-seed.ts`, generated from the verified
+2026-08-13 import). The seed fires only when both tables are empty — any
+existing row, seeded or hand-made, disables it forever, so nothing the owner
+edits is ever overwritten. Rows keep `mc_id`, so running the real
+mission-control import later converges onto them rather than duplicating.
+This is deliberate: deploys need zero setup and no database hand-off. Delete
+the file and its call in `dashboard-state.ts` once seeding has outlived its
+usefulness.
+
 ### Migrations
 
 Schema changes go through `src/lib/migrations.ts` (consolidation phase 1):
@@ -257,16 +286,17 @@ This means the dashboard can be installed and reopened more like an app.
 
 ```bash
 npm install
-# pick one: run open on this machine only…
-echo 'OWNER_DASHBOARD_ALLOW_UNPROTECTED=1' >> .env.local
-# …or set a real token
-echo "OWNER_DASHBOARD_AUTH_TOKEN=$(openssl rand -base64 32)" >> .env.local
 npm run dev
 ```
 
-Open `http://localhost:3000`. With neither variable set the dashboard is
-locked and shows setup instructions instead of data — that is the default
-doing its job, not a bug.
+Open `http://localhost:3000`. It runs open (the committed `.env` opts out of
+the lock — see Access Control) and comes up with the seeded clients and
+projects. To develop against the locked flow instead, set a token in
+`.env.local`:
+
+```bash
+echo "OWNER_DASHBOARD_AUTH_TOKEN=$(openssl rand -base64 32)" >> .env.local
+```
 
 Node >= 22.5 is required — `src/lib/dashboard-state.ts` uses `node:sqlite`.
 
@@ -430,7 +460,8 @@ Known and deliberate, roughly in the order they are worth fixing:
   drag-and-drop, and the ClickUp write-back — which is where the shipped bugs
   were. Extracting the fetch/save orchestration into a hook would make it
   testable and shrink the file at the same time.
-- ~~The dashboard ships unprotected by default~~ — fixed in consolidation
-  phase 1: unset now means locked, and running open requires the explicit
-  `OWNER_DASHBOARD_ALLOW_UNPROTECTED=1`. The live host still needs a real
-  token set at deploy time.
+- The dashboard currently runs open — but explicitly, not by accident: the
+  committed `.env` opts out of phase 1's locked-by-default, per the owner's
+  call, and the header chip shows it. Setting a token (which always wins over
+  the opt-out) is the single step to lock it when client data on the tailnet
+  starts feeling heavier than the login ceremony.

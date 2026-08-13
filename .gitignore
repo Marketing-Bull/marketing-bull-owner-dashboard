@@ -3,7 +3,8 @@ node_modules
 out
 dist
 tsconfig.tsbuildinfo
-.env
+# .env is committed on purpose (non-secret defaults; see the file header).
+# Anything secret goes in .env.local, which stays ignored.
 .env.local
 .env.production
 data/
