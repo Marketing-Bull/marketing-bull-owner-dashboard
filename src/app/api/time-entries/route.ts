@@ -51,7 +51,9 @@ export async function POST(request: Request) {
       clientId: input.clientId as string | null | undefined,
       projectId: input.projectId as string | null | undefined,
       billable: input.billable as boolean | undefined,
-      details: input.details as string | undefined
+      details: input.details as string | undefined,
+      startTime: input.startTime as string | null | undefined,
+      endTime: input.endTime as string | null | undefined
     });
     return NextResponse.json(
       { timeEntry },
