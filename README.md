@@ -50,6 +50,12 @@ Ticking an `Up Next` checkbox writes the task's status back to ClickUp, so the
 change lives in ClickUp rather than in the page.
 
 3. `UI/runtime layer`
+- Persistent sidebar menu (mission-control-style layout: Operate / Track /
+  System / External sections) around every screen except `/login`; drawer +
+  top bar under 860px. Screens for phases 3–5 (`/time`, `/expenses`,
+  `/mileage`, `/calendar`) are present as honest placeholders marked "soon";
+  `/settings` shows protection state, data locations, and links the
+  consolidation scope at `/scope`
 - Drag-and-drop widget ordering
 - Collapsible panels (including the Daily Hyperfocus System), persisted server-side
 - responsive top-aligned grid
@@ -410,8 +416,11 @@ ClickUp source ids when it stops being one.
 - `src/lib/clickup.ts`
 - `src/lib/dashboard-data.ts`
 - `src/lib/dashboard-layout.ts`
-- `src/app/clients/page.tsx`
-- `src/app/projects/page.tsx`
+- `src/components/app-shell.tsx`
+- `src/app/(app)/layout.tsx`
+- `src/app/(app)/clients/page.tsx`
+- `src/app/(app)/projects/page.tsx`
+- `src/app/(app)/settings/page.tsx`
 - `src/app/api/clients/route.ts`
 - `src/app/api/projects/route.ts`
 - `src/app/api/admin/import-mission-control/route.ts`

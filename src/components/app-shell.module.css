@@ -1,0 +1,181 @@
+/*
+ * The app shell: fixed sidebar on desktop, top bar + drawer on mobile.
+ * Structure mirrors mission-control's layout (sectioned sidebar, active
+ * highlight, footer meta); the visual language is this dashboard's own.
+ */
+
+.shell {
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  /* --panel is translucent (fine for cards on the page ground); an overlay
+     needs an opaque ground of its own or content bleeds through the drawer. */
+  background: linear-gradient(var(--panel), var(--panel)), var(--bg);
+  border-right: 1px solid var(--line);
+  padding: 18px 14px;
+  gap: 6px;
+  overflow-y: auto;
+  z-index: 40;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 10px 14px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.brandEyebrow {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.brandName {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.section {
+  margin-top: 10px;
+}
+
+.sectionLabel {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 10px 6px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+  line-height: 1;
+  border: 1px solid transparent;
+}
+
+.item:hover {
+  background: var(--panel-soft);
+}
+
+.itemActive {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.itemIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.itemHint {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.footer {
+  margin-top: auto;
+  padding: 12px 10px 4px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.content {
+  margin-left: 232px;
+  min-height: 100vh;
+}
+
+/* ---------- mobile ---------- */
+
+.topbar {
+  display: none;
+}
+
+.scrim {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+    box-shadow: none;
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+    box-shadow: var(--shadow);
+  }
+
+  .content {
+    margin-left: 0;
+    padding-top: 52px;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: fixed;
+    inset: 0 0 auto 0;
+    height: 52px;
+    padding: 0 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    z-index: 30;
+  }
+
+  .topbarButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--panel-strong);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .topbarTitle {
+    font-size: 14px;
+    font-weight: 650;
+  }
+
+  .scrimOpen {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.35);
+    z-index: 35;
+    border: 0;
+    padding: 0;
+  }
+}
