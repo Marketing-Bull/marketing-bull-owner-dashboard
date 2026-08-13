@@ -394,6 +394,31 @@ After any Next upgrade, re-check the gate rather than assuming it survived —
 with a token set, every `/api/*` route must answer 401 without credentials, and
 page requests must land on `/login`.
 
+## Branches
+
+Two long-lived branches, plus short feature branches:
+
+| Branch | Role |
+| --- | --- |
+| `preview` | Integration. Every change lands here first, as its own small pull request. |
+| `stable` | Release — what the live host runs. Only ever advanced by a "promote preview to stable" merge, so its tree is always a tree that has sat on `preview`. |
+| `feature/*`, `redesign/*`, `chore/*` | Short-lived, one per reviewable change, merged into `preview` and deleted. |
+
+The rule that keeps this honest: **nothing reaches `stable` except by promoting
+`preview`.** A promotion is therefore a no-op diff — if promoting ever shows
+file changes, something was committed to `stable` directly and the two have
+diverged.
+
+Work in ordered, small pull requests rather than one long-lived branch; the
+redesign track (`redesign/01-query-contracts` … `06-maps-adapter`) is the
+worked example, and
+[`docs/transaction-ledgers-redesign-plan.md`](docs/transaction-ledgers-redesign-plan.md)
+records the reasoning.
+
+`main` is **retired**. It stopped at `46a0ee9`, holds nothing the other two
+lack, and is kept only so old links resolve. Do not branch from it or merge
+into it.
+
 ## Checks
 
 ```bash
@@ -403,8 +428,8 @@ npm test          # npm run test:watch while iterating
 npm run build
 ```
 
-`.github/workflows/ci.yml` runs all four on every push to `main` and every pull
-request.
+`.github/workflows/ci.yml` runs all four on every pull request and on every
+push to `preview` and `stable`.
 
 Tests live next to what they cover (`src/lib/*.test.ts`) and are aimed at the
 bugs that actually shipped rather than at coverage for its own sake:
