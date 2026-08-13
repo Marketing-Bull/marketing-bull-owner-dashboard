@@ -5,11 +5,88 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import { getClient, getProject, newEntityId, resolveHourlyRate } from "@/lib/entities";
+import {
+  addInFilter,
+  addLikeFilter,
+  assertRange,
+  booleanParam,
+  countRows,
+  dateParam,
+  facetCounts,
+  listParam,
+  makePageInfo,
+  numberParam,
+  pageParams,
+  sortParams,
+  textParam,
+  type FacetCount,
+  type QueryScalar,
+  type SortDirection,
+  type TransactionQueryResult
+} from "@/lib/transaction-query";
 import type { HoursEntry, TimeEntry, TimeEntryRecentDefaults } from "@/lib/types";
 
 type Row = Record<string, unknown>;
 
 export class TimeEntryValidationError extends Error {}
+
+export const TIME_ENTRY_SORTS = [
+  "date",
+  "hours",
+  "rate",
+  "amount",
+  "details",
+  "billable",
+  "startTime",
+  "endTime",
+  "createdAt",
+  "updatedAt"
+] as const;
+
+export type TimeEntrySort = (typeof TIME_ENTRY_SORTS)[number];
+
+export type TimeEntryQuery = {
+  page: number;
+  pageSize: number;
+  sort: TimeEntrySort;
+  direction: SortDirection;
+  id?: string;
+  mcId?: number;
+  search?: string;
+  from?: string;
+  to?: string;
+  clientIds?: string[];
+  projectIds?: string[];
+  billable?: boolean;
+  hoursMin?: number;
+  hoursMax?: number;
+  rateMin?: number;
+  rateMax?: number;
+  amountMin?: number;
+  amountMax?: number;
+  details?: string;
+  startTime?: string;
+  endTime?: string;
+  hasStartTime?: boolean;
+  hasEndTime?: boolean;
+  createdFrom?: string;
+  createdTo?: string;
+  updatedFrom?: string;
+  updatedTo?: string;
+};
+
+export type TimeEntryQueryTotals = {
+  hours: number;
+  billableHours: number;
+  amount: number;
+  billableAmount: number;
+};
+
+export type TimeEntryQueryFacets = {
+  clients: FacetCount[];
+  projects: FacetCount[];
+  billable: FacetCount[];
+};
 
 export type TimeEntryInput = {
   clientId?: string | null;
@@ -146,6 +223,153 @@ export function listTimeEntries(
     .prepare(`SELECT * FROM time_entries ${where} ORDER BY date DESC, created_at DESC LIMIT ?`)
     .all(...params) as Row[];
   return rows.map(rowToTimeEntry);
+}
+
+export function parseTimeEntryQuery(params: URLSearchParams): TimeEntryQuery {
+  const pagination = pageParams(params);
+  const sorting = sortParams(params, TIME_ENTRY_SORTS, "date");
+  const query: TimeEntryQuery = {
+    ...pagination,
+    ...sorting,
+    id: textParam(params, "id", { maxLength: 80 }),
+    mcId: numberParam(params, "mcId", { min: 0, integer: true }),
+    search: textParam(params, "search"),
+    from: dateParam(params, "from"),
+    to: dateParam(params, "to"),
+    clientIds: listParam(params, "clientId"),
+    projectIds: listParam(params, "projectId"),
+    billable: booleanParam(params, "billable"),
+    hoursMin: numberParam(params, "hoursMin", { min: 0 }),
+    hoursMax: numberParam(params, "hoursMax", { min: 0 }),
+    rateMin: numberParam(params, "rateMin", { min: 0 }),
+    rateMax: numberParam(params, "rateMax", { min: 0 }),
+    amountMin: numberParam(params, "amountMin", { min: 0 }),
+    amountMax: numberParam(params, "amountMax", { min: 0 }),
+    details: textParam(params, "details"),
+    startTime: textParam(params, "startTime", { maxLength: 80 }),
+    endTime: textParam(params, "endTime", { maxLength: 80 }),
+    hasStartTime: booleanParam(params, "hasStartTime"),
+    hasEndTime: booleanParam(params, "hasEndTime"),
+    createdFrom: dateParam(params, "createdFrom"),
+    createdTo: dateParam(params, "createdTo"),
+    updatedFrom: dateParam(params, "updatedFrom"),
+    updatedTo: dateParam(params, "updatedTo")
+  };
+  assertRange(query.from, query.to, "Date");
+  assertRange(query.hoursMin, query.hoursMax, "Hours");
+  assertRange(query.rateMin, query.rateMax, "Rate");
+  assertRange(query.amountMin, query.amountMax, "Amount");
+  assertRange(query.createdFrom, query.createdTo, "Created date");
+  assertRange(query.updatedFrom, query.updatedTo, "Updated date");
+  return query;
+}
+
+function timeEntryWhere(query: TimeEntryQuery): { where: string; params: QueryScalar[] } {
+  const clauses: string[] = [];
+  const params: QueryScalar[] = [];
+  const exact = (column: string, value: QueryScalar | undefined) => {
+    if (value === undefined) return;
+    clauses.push(`${column} = ?`);
+    params.push(value);
+  };
+  const minimum = (column: string, value: QueryScalar | undefined) => {
+    if (value === undefined) return;
+    clauses.push(`${column} >= ?`);
+    params.push(value);
+  };
+  const maximum = (column: string, value: QueryScalar | undefined) => {
+    if (value === undefined) return;
+    clauses.push(`${column} <= ?`);
+    params.push(value);
+  };
+
+  exact("id", query.id);
+  exact("mc_id", query.mcId);
+  minimum("date", query.from);
+  maximum("date", query.to);
+  addInFilter(clauses, params, "client_id", query.clientIds);
+  addInFilter(clauses, params, "project_id", query.projectIds);
+  exact("billable", query.billable === undefined ? undefined : query.billable ? 1 : 0);
+  minimum("hours", query.hoursMin);
+  maximum("hours", query.hoursMax);
+  minimum("rate", query.rateMin);
+  maximum("rate", query.rateMax);
+  minimum("(hours * rate)", query.amountMin);
+  maximum("(hours * rate)", query.amountMax);
+  addLikeFilter(clauses, params, "details", query.details);
+  addLikeFilter(
+    clauses,
+    params,
+    "COALESCE(details, '') || ' ' || date || ' ' || COALESCE(start_time, '') || ' ' || COALESCE(end_time, '')",
+    query.search
+  );
+  exact("start_time", query.startTime);
+  exact("end_time", query.endTime);
+  if (query.hasStartTime !== undefined) {
+    clauses.push(query.hasStartTime ? "start_time IS NOT NULL AND start_time <> ''" : "(start_time IS NULL OR start_time = '')");
+  }
+  if (query.hasEndTime !== undefined) {
+    clauses.push(query.hasEndTime ? "end_time IS NOT NULL AND end_time <> ''" : "(end_time IS NULL OR end_time = '')");
+  }
+  minimum("SUBSTR(created_at, 1, 10)", query.createdFrom);
+  maximum("SUBSTR(created_at, 1, 10)", query.createdTo);
+  minimum("SUBSTR(updated_at, 1, 10)", query.updatedFrom);
+  maximum("SUBSTR(updated_at, 1, 10)", query.updatedTo);
+  return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
+}
+
+export function queryTimeEntries(
+  db: DatabaseSync,
+  query: TimeEntryQuery
+): TransactionQueryResult<TimeEntry, TimeEntryQueryTotals, TimeEntryQueryFacets> {
+  const { where, params } = timeEntryWhere(query);
+  const totalItems = countRows(db, "time_entries", where, params);
+  const sortColumns: Record<TimeEntrySort, string> = {
+    date: "date",
+    hours: "hours",
+    rate: "rate",
+    amount: "(hours * rate)",
+    details: "details COLLATE NOCASE",
+    billable: "billable",
+    startTime: "start_time",
+    endTime: "end_time",
+    createdAt: "created_at",
+    updatedAt: "updated_at"
+  };
+  const direction = query.direction.toUpperCase();
+  const offset = (query.page - 1) * query.pageSize;
+  const rows = db
+    .prepare(`
+      SELECT * FROM time_entries ${where}
+      ORDER BY ${sortColumns[query.sort]} ${direction}, created_at ${direction}, id ${direction}
+      LIMIT ? OFFSET ?
+    `)
+    .all(...params, query.pageSize, offset) as Row[];
+  const totals = db
+    .prepare(`
+      SELECT
+        COALESCE(SUM(hours), 0) AS hours,
+        COALESCE(SUM(CASE WHEN billable = 1 THEN hours ELSE 0 END), 0) AS billable_hours,
+        COALESCE(SUM(hours * rate), 0) AS amount,
+        COALESCE(SUM(CASE WHEN billable = 1 THEN hours * rate ELSE 0 END), 0) AS billable_amount
+      FROM time_entries ${where}
+    `)
+    .get(...params) as Record<string, number>;
+  return {
+    items: rows.map(rowToTimeEntry),
+    pageInfo: makePageInfo(query.page, query.pageSize, totalItems),
+    filteredTotals: {
+      hours: Number(totals.hours),
+      billableHours: Number(totals.billable_hours),
+      amount: Number(totals.amount),
+      billableAmount: Number(totals.billable_amount)
+    },
+    availableFacets: {
+      clients: facetCounts(db, "time_entries", "COALESCE(client_id, '__unassigned__')", where, params),
+      projects: facetCounts(db, "time_entries", "COALESCE(project_id, '__unassigned__')", where, params),
+      billable: facetCounts(db, "time_entries", "billable", where, params, { includeEmpty: true })
+    }
+  };
 }
 
 export function getTimeEntry(db: DatabaseSync, id: string): TimeEntry | null {

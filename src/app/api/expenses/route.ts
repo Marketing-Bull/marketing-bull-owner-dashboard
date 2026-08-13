@@ -1,7 +1,16 @@
 import { NextResponse } from "next/server";
 import { getDatabase } from "@/lib/dashboard-state";
-import { createExpense, ExpenseValidationError, getExpenseSummary, getRecentExpenseDefaults, listChartAccounts, listExpenseCategoryAccounts, listExpenses, listRecurringExpenses } from "@/lib/expenses";
-import type { ExpenseKind } from "@/lib/types";
+import {
+  createExpense,
+  ExpenseValidationError,
+  getRecentExpenseDefaults,
+  listChartAccounts,
+  listExpenseCategoryAccounts,
+  listRecurringExpenses,
+  parseExpenseQuery,
+  queryExpenses
+} from "@/lib/expenses";
+import { TransactionQueryValidationError } from "@/lib/transaction-query";
 
 export const dynamic = "force-dynamic";
 
@@ -9,14 +18,21 @@ export async function GET(request: Request) {
   try {
     const params = new URL(request.url).searchParams;
     const db = getDatabase();
+    const result = queryExpenses(db, parseExpenseQuery(params));
     return NextResponse.json({
-      expenses: listExpenses(db, { from: params.get("from") || undefined, to: params.get("to") || undefined,
-        kind: (params.get("kind") || undefined) as ExpenseKind | undefined, limit: Number(params.get("limit") || 300) }),
+      ...result,
+      // Temporary compatibility for the current Expenses screen.
+      expenses: result.items,
       recurringExpenses: listRecurringExpenses(db), recentDefaults: getRecentExpenseDefaults(db),
-      accounts: listChartAccounts(db), categoryAccounts: listExpenseCategoryAccounts(db), summary: getExpenseSummary(db)
+      accounts: listChartAccounts(db), categoryAccounts: listExpenseCategoryAccounts(db),
+      summary: {
+        expenses: result.filteredTotals.expenses,
+        income: result.filteredTotals.income,
+        reimbursable: result.filteredTotals.reimbursable
+      }
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    const status = error instanceof ExpenseValidationError ? 400 : 500;
+    const status = error instanceof ExpenseValidationError || error instanceof TransactionQueryValidationError ? 400 : 500;
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status });
   }
 }
