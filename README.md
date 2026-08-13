@@ -2,6 +2,16 @@
 
 Standalone daily owner dashboard for Alex.
 
+## The Consolidation Plan
+
+The dashboard is mid-way through absorbing Recoup's and Mission Control's
+client / project / time / expense / mileage model and becoming the single
+system of record. The full scope — decisions, target schema, phase status —
+lives at [`docs/dashboard-consolidation-scope.html`](docs/dashboard-consolidation-scope.html)
+(open it in a browser). Phases 0–2 are done: migration runner, locked-capable
+auth, backups, and Clients + Projects as owned entities with the
+mission-control data imported. Next: time entry, then expenses and mileage.
+
 ## What It Is
 
 - Lightweight Next.js app with one main dashboard screen
