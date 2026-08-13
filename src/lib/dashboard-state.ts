@@ -9,6 +9,7 @@ import {
   type WidgetId
 } from "@/lib/dashboard-layout";
 import { ensureDailyBackup } from "@/lib/backup";
+import { seedEntitiesIfEmpty } from "@/lib/entity-seed";
 import {
   buildHistorySnapshot,
   HISTORY_LOOKBACK_DAYS,
@@ -60,6 +61,10 @@ export function getDatabase(): DatabaseSync {
   mkdirSync(dirname(path), { recursive: true });
   database = new DatabaseSync(path);
   runMigrations(database, DASHBOARD_MIGRATIONS);
+  // First boot only: load the imported mission-control clients/projects so a
+  // fresh deployment starts populated. A database with any entity row -- this
+  // one included, on every open after the first -- is left alone.
+  seedEntitiesIfEmpty(database);
 
   return database;
 }
