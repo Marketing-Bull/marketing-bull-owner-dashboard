@@ -147,6 +147,108 @@ export type TimeEntryRecentDefaults = {
   billable: boolean;
 };
 
+export const EXPENSE_KINDS = ["expense", "income"] as const;
+export type ExpenseKind = (typeof EXPENSE_KINDS)[number];
+
+export const EXPENSE_FREQUENCIES = ["none", "weekly", "monthly", "quarterly", "yearly"] as const;
+export type ExpenseFrequency = (typeof EXPENSE_FREQUENCIES)[number];
+
+export const RECURRING_EXPENSE_STATUSES = ["active", "paused", "cancelled"] as const;
+export type RecurringExpenseStatus = (typeof RECURRING_EXPENSE_STATUSES)[number];
+
+export type ChartAccount = {
+  accountCode: string;
+  mcId: number | null;
+  category: string;
+  scheduleCLine: string;
+  description: string;
+  notes: string;
+  isIncome: boolean;
+  accountType: string;
+};
+
+export type Expense = {
+  id: string;
+  mcId: number | null;
+  clientId: string | null;
+  projectId: string | null;
+  recurringExpenseId: string | null;
+  date: string;
+  amount: number;
+  kind: ExpenseKind;
+  category: string;
+  company: string;
+  vendor: string;
+  details: string;
+  accountCode: string | null;
+  billable: boolean;
+  reimbursable: boolean;
+  recurring: ExpenseFrequency;
+  recurringDay: number | null;
+  paymentMethod: string;
+  status: string;
+  tags: string;
+  receiptName: string | null;
+  receiptPath: string | null;
+  annualizedAmount: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ExpenseRecentDefaults = {
+  category: string;
+  company: string;
+  accountCode: string | null;
+  paymentMethod: string;
+};
+
+export type RecurringExpense = {
+  id: string;
+  mcId: number | null;
+  clientId: string | null;
+  projectId: string | null;
+  description: string;
+  vendor: string;
+  amount: number;
+  category: string;
+  company: string;
+  frequency: Exclude<ExpenseFrequency, "none">;
+  dayOfMonth: number | null;
+  startDate: string;
+  endDate: string | null;
+  status: RecurringExpenseStatus;
+  notes: string;
+  paymentMethod: string;
+  accountCode: string | null;
+  annualizedAmount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MileageEntry = {
+  id: string;
+  mcId: number | null;
+  clientId: string | null;
+  projectId: string | null;
+  tripName: string;
+  date: string;
+  startAddress: string;
+  endAddress: string;
+  purpose: string;
+  miles: number;
+  roundTrip: boolean;
+  totalMiles: number;
+  billable: boolean;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MileageRecentTrip = Pick<
+  MileageEntry,
+  "tripName" | "startAddress" | "endAddress" | "miles" | "roundTrip" | "purpose"
+>;
+
 export type ClickUpProject = {
   id: string;
   title: string;
@@ -186,9 +288,23 @@ export type ClickUpSyncInfo = {
   error?: string;
 };
 
+export type ClickUpSourceEntry = {
+  id: string;
+  name: string;
+  taskCount: number;
+};
+
+export type ClickUpSourceInfo = {
+  /** Human-readable query boundary, independent of which lists happen to match. */
+  selection: string;
+  spaces: ClickUpSourceEntry[];
+  lists: ClickUpSourceEntry[];
+};
+
 export type DashboardData = {
   priorities: PriorityBucket[];
   hours: {
+    day: HoursEntry[];
     week: HoursEntry[];
     month: HoursEntry[];
   };
@@ -196,6 +312,7 @@ export type DashboardData = {
   source?: "live" | "sample";
   generatedAt?: number;
   clickUpSync?: ClickUpSyncInfo;
+  clickUpSources?: ClickUpSourceInfo;
   /** Set when a route served sample data; explains what the live fetch hit. */
   fallbackReason?: string;
 };

@@ -58,6 +58,25 @@ export default async function SettingsPage() {
         <ClickUpSettingsCard initialStatus={clickUpStatus} />
 
         <section className={styles.card}>
+          <div className={styles.rowTitle}>ClickUp task association</div>
+          <p className={styles.empty}>
+            The dashboard reads every open task assigned to the configured user across the ClickUp
+            workspace; it does not maintain a Space or List allowlist. The ClickUp Tasks widget shows
+            the Spaces and Lists observed in the latest successful sync.
+          </p>
+          <p className={styles.empty}>
+            Recommended: add ClickUp dropdown or text Custom Fields named <strong>Client</strong> and
+            <strong> Project</strong>, using the exact local names shown on the Clients and Projects
+            pages. The Project value is enough—the dashboard derives its Client automatically.
+          </p>
+          <p className={styles.empty}>
+            Tags also work as <strong>client:Client Name</strong> and <strong>project:Project Name</strong>.
+            As a zero-setup fallback, an exact List-to-Project name match is used; exact Folder or Space
+            names can match a Client. Ambiguous or near matches stay unassigned instead of being guessed.
+          </p>
+        </section>
+
+        <section className={styles.card}>
           <div className={styles.rowTitle}>Data</div>
           <p className={styles.empty}>
             SQLite at `data/dashboard.sqlite` under the app&apos;s working directory (or
@@ -66,7 +85,8 @@ export default async function SettingsPage() {
             snapshot over the file, start.
           </p>
           <p className={styles.empty}>
-            Clients and projects were imported from mission-control and are seeded on first boot;
+            Clients and projects are seeded on first boot. Time, expenses, recurring definitions,
+            accounting references, and mileage were imported from mission-control into this database;
             `POST /api/admin/import-mission-control` re-converges from a fresher MC copy (requires
             the token gate to be on).
           </p>
@@ -75,9 +95,9 @@ export default async function SettingsPage() {
         <section className={styles.card}>
           <div className={styles.rowTitle}>Consolidation</div>
           <p className={styles.empty}>
-            Phases 0–2 done: foundation, then Clients + Projects as owned entities. Next: Time
-            (phase 3), Expenses and Mileage (phase 4), Calendar views (phase 5), Eisenhower and
-            derived MRR (phase 6). The full plan of record:
+            Phases 0–4 are done: foundation, Clients + Projects, Time, then Expenses + Mileage.
+            Next: Calendar views (phase 5), then the remaining prioritization and reporting work.
+            The full plan of record:
           </p>
           <p className={styles.empty}>
             <Link href="/scope" className={styles.buttonQuiet}>

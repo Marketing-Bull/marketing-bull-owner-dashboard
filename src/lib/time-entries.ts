@@ -289,13 +289,14 @@ function hoursByProject(db: DatabaseSync, from: string, to: string): HoursEntry[
 export function buildLocalHoursWindows(
   db: DatabaseSync,
   now: Date = new Date()
-): { week: HoursEntry[]; month: HoursEntry[] } {
+): { day: HoursEntry[]; week: HoursEntry[]; month: HoursEntry[] } {
   const today = localDateKey(now);
   const weekStart = new Date(now);
   const weekday = weekStart.getDay();
   weekStart.setDate(weekStart.getDate() + (weekday === 0 ? -6 : 1 - weekday));
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   return {
+    day: hoursByProject(db, today, today),
     week: hoursByProject(db, localDateKey(weekStart), today),
     month: hoursByProject(db, localDateKey(monthStart), today)
   };

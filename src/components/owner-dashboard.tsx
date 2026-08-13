@@ -26,6 +26,7 @@ import {
 import {
   DEFAULT_WIDGET_ORDER,
   HYPERFOCUS_PANEL_ID,
+  WIDGET_LABELS,
   isCollapsibleId,
   type CollapsibleId,
   type WidgetId
@@ -302,6 +303,8 @@ export function OwnerDashboard({ version }: { version: string }) {
   const [manual, setManual] = useState<ManualState>(DEFAULT_MANUAL_STATE);
   const [widgetOrder, setWidgetOrder] = useState<WidgetId[]>([...DEFAULT_WIDGET_ORDER]);
   const [collapsed, setCollapsed] = useState<CollapsibleId[]>([]);
+  const [hiddenWidgets, setHiddenWidgets] = useState<WidgetId[]>([]);
+  const [editingLayout, setEditingLayout] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   // The entities the dashboard owns (consolidation phase 2), served locally.
   const [localClients, setLocalClients] = useState<Client[]>([]);
@@ -321,7 +324,7 @@ export function OwnerDashboard({ version }: { version: string }) {
   const [loadingDashboard, setLoadingDashboard] = useState(true);
   const [loadingCalendar, setLoadingCalendar] = useState(true);
   const [loadingState, setLoadingState] = useState(true);
-  const [hoursWindow, setHoursWindow] = useState<"week" | "month">("week");
+  const [hoursWindow, setHoursWindow] = useState<"day" | "week" | "month">("week");
   const [lastRefreshed, setLastRefreshed] = useState<number | null>(null);
   const [calendarExpanded, setCalendarExpanded] = useState(false);
   const [selectedCalendarEvent, setSelectedCalendarEvent] = useState<CalendarEvent | null>(null);
@@ -358,16 +361,23 @@ export function OwnerDashboard({ version }: { version: string }) {
         ? (json.widgetOrder as WidgetId[])
         : [...DEFAULT_WIDGET_ORDER];
       const loadedCollapsed = Array.isArray(json?.collapsed) ? json.collapsed.filter(isCollapsibleId) : [];
+      const loadedHidden = Array.isArray(json?.hiddenWidgets)
+        ? json.hiddenWidgets.filter((entry: unknown): entry is WidgetId =>
+            DEFAULT_WIDGET_ORDER.includes(entry as WidgetId)
+          )
+        : [];
 
       setManual(loadedManual);
       setWidgetOrder(loadedOrder);
       setCollapsed(loadedCollapsed);
+      setHiddenWidgets(loadedHidden);
       setHistory(Array.isArray(json?.history) ? (json.history as HistoryEntry[]) : []);
       setAuthConfigured(json?.authConfigured !== false);
       savedSnapshotRef.current = serializeState({
         manual: loadedManual,
         widgetOrder: loadedOrder,
-        collapsed: loadedCollapsed
+        collapsed: loadedCollapsed,
+        hiddenWidgets: loadedHidden
       });
       hasLoadedStateRef.current = true;
     } catch (error) {
@@ -381,7 +391,8 @@ export function OwnerDashboard({ version }: { version: string }) {
   async function saveDashboardState(
     nextManual: ManualState,
     nextWidgetOrder: WidgetId[],
-    nextCollapsed: CollapsibleId[]
+    nextCollapsed: CollapsibleId[],
+    nextHiddenWidgets: WidgetId[]
   ) {
     setSaveStatus("saving");
     try {
@@ -393,7 +404,8 @@ export function OwnerDashboard({ version }: { version: string }) {
         body: JSON.stringify({
           manual: nextManual,
           widgetOrder: nextWidgetOrder,
-          collapsed: nextCollapsed
+          collapsed: nextCollapsed,
+          hiddenWidgets: nextHiddenWidgets
         })
       });
       if (redirectedToLogin(response)) return;
@@ -407,7 +419,8 @@ export function OwnerDashboard({ version }: { version: string }) {
       savedSnapshotRef.current = serializeState({
         manual: nextManual,
         widgetOrder: nextWidgetOrder,
-        collapsed: nextCollapsed
+        collapsed: nextCollapsed,
+        hiddenWidgets: nextHiddenWidgets
       });
       setLastSavedAt(Date.now());
       setSaveStatus("saved");
@@ -497,15 +510,15 @@ export function OwnerDashboard({ version }: { version: string }) {
 
     // Nothing actually changed (this run came from a load or a refresh), so
     // there is nothing to write and nothing to announce.
-    if (!hasUnsavedChanges({ manual, widgetOrder, collapsed }, savedSnapshotRef.current)) return;
+    if (!hasUnsavedChanges({ manual, widgetOrder, collapsed, hiddenWidgets }, savedSnapshotRef.current)) return;
 
     // Record what is owed before waiting out the debounce, so a refresh (or
     // anything else that interrupts) can still flush it instead of dropping it.
-    pendingSaveRef.current = { manual, widgetOrder, collapsed };
+    pendingSaveRef.current = { manual, widgetOrder, collapsed, hiddenWidgets };
 
     saveTimeoutRef.current = setTimeout(() => {
       saveTimeoutRef.current = null;
-      void saveDashboardState(manual, widgetOrder, collapsed);
+      void saveDashboardState(manual, widgetOrder, collapsed, hiddenWidgets);
     }, 350);
 
     return () => {
@@ -513,7 +526,7 @@ export function OwnerDashboard({ version }: { version: string }) {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [loadingState, manual, widgetOrder, collapsed]);
+  }, [loadingState, manual, widgetOrder, collapsed, hiddenWidgets]);
 
   /**
    * Writes any debounced edit immediately.
@@ -533,7 +546,7 @@ export function OwnerDashboard({ version }: { version: string }) {
     const pending = pendingSaveRef.current;
     if (!pending) return;
 
-    await saveDashboardState(pending.manual, pending.widgetOrder, pending.collapsed);
+    await saveDashboardState(pending.manual, pending.widgetOrder, pending.collapsed, pending.hiddenWidgets);
   }
 
   function setTaskDone(taskId: string, done: boolean) {
@@ -590,6 +603,23 @@ export function OwnerDashboard({ version }: { version: string }) {
       collapsed: collapsed.includes(id),
       onToggleCollapse: () => toggleCollapsed(id)
     };
+  }
+
+  function moveVisibleWidget(widgetId: WidgetId, direction: -1 | 1) {
+    setWidgetOrder((current) => {
+      const visible = current.filter((id) => !hiddenWidgets.includes(id));
+      const index = visible.indexOf(widgetId);
+      const target = visible[index + direction];
+      return target ? moveWidget(current, widgetId, target) : current;
+    });
+  }
+
+  function removeWidget(widgetId: WidgetId) {
+    setHiddenWidgets((current) => current.includes(widgetId) ? current : [...current, widgetId]);
+  }
+
+  function addWidget(widgetId: WidgetId) {
+    setHiddenWidgets((current) => current.filter((id) => id !== widgetId));
   }
 
   function refreshAll() {
@@ -671,36 +701,6 @@ export function OwnerDashboard({ version }: { version: string }) {
         })),
     [activeProjects, clientNameById]
   );
-  const projectPriorityBuckets = useMemo(
-    () => [
-      {
-        key: "now",
-        title: "Urgent and important",
-        note: "Needs owner action",
-        projects: activeProjects.filter((project) => project.urgent && project.important)
-      },
-      {
-        key: "planned",
-        title: "Important",
-        note: "Protect time for it",
-        projects: activeProjects.filter((project) => !project.urgent && project.important)
-      },
-      {
-        key: "handoff",
-        title: "Urgent",
-        note: "Move or delegate",
-        projects: activeProjects.filter((project) => project.urgent && !project.important)
-      },
-      {
-        key: "backlog",
-        title: "Backlog",
-        note: "Active, not flagged",
-        projects: activeProjects.filter((project) => !project.urgent && !project.important)
-      }
-    ],
-    [activeProjects]
-  );
-
   // `now` stays null through SSR and the first client render so the clock never
   // causes a hydration mismatch; the effect above fills it in and ticks it.
   const dateLabel = now
@@ -813,36 +813,32 @@ export function OwnerDashboard({ version }: { version: string }) {
         title="Project Priorities"
         dragLabel="Project Priorities" {...collapseProps("projects")}
         action={
-          <a href="/projects" className={styles.inlineLinkText}>
-            Manage
-          </a>
+          <span className={styles.badge}>ClickUp</span>
         }
       >
-        {loadingEntities ? (
-          <div className={styles.loader}><LoaderCircle size={16} /> Loading projects</div>
-        ) : entitiesError ? (
-          <div className={styles.error}>{entitiesError}</div>
-        ) : activeProjects.length === 0 ? (
-          <div className={styles.empty}>No active projects yet. Add one on the Projects page.</div>
+        {loadingDashboard ? (
+          <div className={styles.loader}><LoaderCircle size={16} /> Loading ClickUp priorities</div>
+        ) : dashboardError ? (
+          <div className={styles.error}>{dashboardError}</div>
         ) : (
           <div className={styles.priorityGrid}>
-            {projectPriorityBuckets.map((bucket) => (
+            {(dashboardData?.priorities ?? []).map((bucket) => (
               <div key={bucket.key} className={styles.priorityCell}>
                 <div className={styles.priorityHead}>
-                  <span className={styles.priorityKey}>{bucket.title}</span>
+                  <span className={styles.priorityKey}>{bucket.key} · {bucket.label}</span>
                   <span className={styles.tinyUpper}>{bucket.projects.length}</span>
                 </div>
-                <p className={styles.helpText}>{bucket.note}</p>
                 <div className={styles.stack}>
                   {bucket.projects.length === 0 ? (
                     <div className={styles.empty}>None</div>
                   ) : (
-                    bucket.projects.slice(0, 4).map((project) => (
-                      <div key={project.id} className={styles.chip}>
-                        <div className={styles.chipTitle}>{project.name}</div>
-                        <div className={styles.chipMeta}>
-                          {project.clientId ? clientNameById.get(project.clientId) ?? "Unknown client" : "Unassigned"}
+                    bucket.projects.slice(0, 4).map((task) => (
+                      <div key={task.id} className={styles.chip}>
+                        <div className={styles.rowBetween}>
+                          <div className={styles.chipTitle}>{task.title}</div>
+                          {task.href ? <a href={task.href} target="_blank" rel="noreferrer" className={styles.inlineLinkText}>Open</a> : null}
                         </div>
+                        {task.subtitle ? <div className={styles.chipMeta}>{task.subtitle}</div> : null}
                       </div>
                     ))
                   )}
@@ -939,6 +935,13 @@ export function OwnerDashboard({ version }: { version: string }) {
         dragLabel="Hours by Project" {...collapseProps("hours")}
         action={
           <div className={styles.hoursToggle}>
+            <button
+              type="button"
+              className={`${styles.toggleButton} ${hoursWindow === "day" ? styles.toggleActive : ""}`}
+              onClick={() => setHoursWindow("day")}
+            >
+              Day
+            </button>
             <button
               type="button"
               className={`${styles.toggleButton} ${hoursWindow === "week" ? styles.toggleActive : ""}`}
@@ -1112,6 +1115,20 @@ export function OwnerDashboard({ version }: { version: string }) {
                 </div>
               </label>
             ))}
+            <div className={styles.sourceSummary}>
+              <strong>Source scope</strong>
+              <span>{dashboardData?.clickUpSources?.selection ?? "All open tasks assigned to the configured ClickUp user"}</span>
+              <span>
+                Spaces: {dashboardData?.clickUpSources?.spaces.length
+                  ? dashboardData.clickUpSources.spaces.map((space) => `${space.name} (${space.taskCount})`).join(", ")
+                  : "none observed yet"}
+              </span>
+              <span>
+                Lists: {dashboardData?.clickUpSources?.lists.length
+                  ? dashboardData.clickUpSources.lists.map((list) => `${list.name} (${list.taskCount})`).join(", ")
+                  : "none observed yet"}
+              </span>
+            </div>
           </div>
         )}
       </Card>
@@ -1219,22 +1236,6 @@ export function OwnerDashboard({ version }: { version: string }) {
           />
         </div>
       </Card>
-    ),
-    openSlot: (
-      <Card title="Today's Snapshot" dragLabel="Today's Snapshot" {...collapseProps("openSlot")}>
-        <div className={styles.stack}>
-          <div className={styles.openIdea}>
-            <span>Focus: {manual.hyperfocus.lens}</span>
-          </div>
-          <div className={styles.openIdea}>
-            <span>Blocker: {manual.hyperfocus.bottleneck}</span>
-          </div>
-          <div className={styles.openIdea}>
-            <span>Streak: {streakLabel}</span>
-          </div>
-          <p className={styles.helpText}>{manual.hyperfocus.multiply.dailyWin}</p>
-        </div>
-      </Card>
     )
   };
 
@@ -1281,6 +1282,15 @@ export function OwnerDashboard({ version }: { version: string }) {
           <div className={styles.headerActions}>
             <button
               type="button"
+              className={`${styles.button} ${editingLayout ? styles.layoutButtonActive : ""}`}
+              onClick={() => setEditingLayout((current) => !current)}
+              aria-expanded={editingLayout}
+            >
+              <Grip size={16} />
+              Arrange widgets
+            </button>
+            <button
+              type="button"
               className={styles.button}
               onClick={() => {
                 refreshAll();
@@ -1321,6 +1331,61 @@ export function OwnerDashboard({ version }: { version: string }) {
               ))}
             </div>
           </div>
+        ) : null}
+
+        {editingLayout ? (
+          <section className={styles.layoutPanel} aria-label="Arrange dashboard widgets">
+            <div className={styles.layoutPanelHeader}>
+              <div>
+                <h2 className={styles.layoutPanelTitle}>Arrange widgets</h2>
+                <p className={styles.helpText}>Move, remove, or restore widgets. Changes save automatically.</p>
+              </div>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={() => {
+                  setWidgetOrder([...DEFAULT_WIDGET_ORDER]);
+                  setHiddenWidgets([]);
+                }}
+              >
+                Reset layout
+              </button>
+            </div>
+            <div className={styles.layoutColumns}>
+              <div className={styles.layoutColumn}>
+                <strong>Visible widgets</strong>
+                {widgetOrder.filter((id) => !hiddenWidgets.includes(id)).map((widgetId, index, visible) => (
+                  <div key={widgetId} className={styles.layoutRow}>
+                    <span>{WIDGET_LABELS[widgetId]}</span>
+                    <div className={styles.layoutRowActions}>
+                      <button type="button" className={styles.layoutAction} disabled={index === 0} onClick={() => moveVisibleWidget(widgetId, -1)} aria-label={`Move ${WIDGET_LABELS[widgetId]} up`}>
+                        <ChevronUp size={14} />
+                      </button>
+                      <button type="button" className={styles.layoutAction} disabled={index === visible.length - 1} onClick={() => moveVisibleWidget(widgetId, 1)} aria-label={`Move ${WIDGET_LABELS[widgetId]} down`}>
+                        <ChevronDown size={14} />
+                      </button>
+                      <button type="button" className={styles.removeWidgetButton} onClick={() => removeWidget(widgetId)}>
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className={styles.layoutColumn}>
+                <strong>Add widgets</strong>
+                {hiddenWidgets.length === 0 ? (
+                  <p className={styles.helpText}>No widgets have been removed.</p>
+                ) : hiddenWidgets.map((widgetId) => (
+                  <div key={widgetId} className={styles.layoutRow}>
+                    <span>{WIDGET_LABELS[widgetId]}</span>
+                    <button type="button" className={styles.addWidgetButton} onClick={() => addWidget(widgetId)}>
+                      <Plus size={14} /> Add
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
         ) : null}
 
         <Card
@@ -1507,7 +1572,7 @@ export function OwnerDashboard({ version }: { version: string }) {
         </Card>
 
         <div className={styles.grid}>
-          {widgetOrder.map((widgetId) => (
+          {widgetOrder.filter((widgetId) => !hiddenWidgets.includes(widgetId)).map((widgetId) => (
             <div
               key={widgetId}
               className={`${styles.widgetSlot} ${draggingWidget === widgetId ? styles.widgetDragging : ""}`}

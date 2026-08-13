@@ -70,6 +70,35 @@ function mcDb(): DatabaseSync {
       is_billable INTEGER DEFAULT 1, notes TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE chart_of_accounts (
+      id INTEGER PRIMARY KEY, account_number TEXT NOT NULL, category TEXT NOT NULL,
+      schedule_c_line TEXT, irs_description TEXT, notes TEXT, is_income INTEGER DEFAULT 0,
+      account_type TEXT DEFAULT 'expense', created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE category_account_map (
+      id INTEGER PRIMARY KEY, expense_category TEXT NOT NULL, account_code TEXT NOT NULL
+    );
+    CREATE TABLE recurring_expenses (
+      id INTEGER PRIMARY KEY, description TEXT NOT NULL, vendor TEXT, amount REAL NOT NULL,
+      category TEXT NOT NULL, company TEXT, frequency TEXT, day_of_month INTEGER,
+      start_date TEXT NOT NULL, end_date TEXT, status TEXT, notes TEXT, client_id INTEGER,
+      project_id INTEGER, payment_method TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE expenses (
+      id INTEGER PRIMARY KEY, date TEXT NOT NULL, amount REAL NOT NULL, category TEXT NOT NULL,
+      company TEXT, description TEXT, vendor TEXT, account_code TEXT, chart_account_id INTEGER,
+      receipt_path TEXT, client_id INTEGER, project_id INTEGER, is_billable INTEGER DEFAULT 0,
+      is_reimbursable INTEGER DEFAULT 0, tags TEXT, recurring_type TEXT DEFAULT 'none',
+      recurring_day INTEGER, payment_method TEXT, expense_status TEXT, recurring_expense_id INTEGER,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE mileage_entries (
+      id INTEGER PRIMARY KEY, trip_name TEXT, entry_date TEXT NOT NULL, start_address TEXT,
+      end_address TEXT, miles REAL NOT NULL, is_round_trip INTEGER DEFAULT 0, total_miles REAL NOT NULL,
+      client_id INTEGER, project_id INTEGER, purpose TEXT, notes TEXT, is_billable INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `);
 
   const addClient = db.prepare(
@@ -105,6 +134,17 @@ function mcDb(): DatabaseSync {
   addTime.run(102, 10, null, 1, "Bad date repaired", "10:30", "10:30", "", null, 1, null, 0, "", "2026-03-12 12:00:00");
   addTime.run(103, 10, null, 1, "No duration", "2026-03-13", "", "", null, null, null, 1, "", "2026-03-13 12:00:00");
 
+  db.prepare("INSERT INTO chart_of_accounts (id,account_number,category,schedule_c_line,is_income,account_type) VALUES (1,'4000','Income','Line 1',1,'revenue'),(2,'6190','Software','Line 27a',0,'expense')").run();
+  db.prepare("INSERT INTO category_account_map (id,expense_category,account_code) VALUES (1,'Software','6190')").run();
+  db.prepare("INSERT INTO recurring_expenses (id,description,amount,category,company,frequency,day_of_month,start_date,status,client_id) VALUES (20,'Hosting',20,'Software','Marketing Bull','monthly',15,'2026-01-15','active',1)").run();
+  db.prepare(`INSERT INTO expenses (id,date,amount,category,company,description,client_id,recurring_expense_id,recurring_type,created_at)
+    VALUES (200,'2026-03-10',20,'Software','Marketing Bull','Hosting',1,20,'none','2026-03-10'),
+           (201,'2026-03-11',100,'Revenue','Marketing Bull','Payment',NULL,NULL,'none','2026-03-11'),
+           (202,'2026-03-12',0,'Software','Marketing Bull','Free plan',NULL,NULL,'none','2026-03-12'),
+           (203,'2026-03-13',-1,'Software','Marketing Bull','Bad',NULL,NULL,'none','2026-03-13')`).run();
+  db.prepare("INSERT INTO mileage_entries (id,trip_name,entry_date,start_address,end_address,miles,is_round_trip,total_miles,client_id,purpose) VALUES (300,'Client run','2026-03-10','A','B',11,1,11,1,'Meeting')").run();
+  db.prepare("INSERT INTO settings (key,value) VALUES ('mileage_rate','0.67')").run();
+
   open.push(db);
   return db;
 }
@@ -118,6 +158,11 @@ describe("runMissionControlImport", () => {
     expect(summary.clients).toEqual({ inserted: 5, updated: 0, skipped: 1 });
     expect(summary.projects).toEqual({ inserted: 4, updated: 0, skipped: 1 });
     expect(summary.timeEntries).toEqual({ inserted: 3, updated: 0, skipped: 1 });
+    expect(summary.chartAccounts).toEqual({ inserted: 2, updated: 0, skipped: 0 });
+    expect(summary.categoryAccounts).toEqual({ inserted: 1, updated: 0, skipped: 0 });
+    expect(summary.recurringExpenses).toEqual({ inserted: 1, updated: 0, skipped: 0 });
+    expect(summary.expenses).toEqual({ inserted: 3, updated: 0, skipped: 1 });
+    expect(summary.mileageEntries).toEqual({ inserted: 1, updated: 0, skipped: 0 });
 
     const clients = listClients(dash, { includeArchived: true });
     const byName = new Map(clients.map((c) => [c.name, c]));
@@ -157,6 +202,8 @@ describe("runMissionControlImport", () => {
     expect(byMcId.get(102)?.billable).toBe(false);
     expect(summary.warnings.join("\n")).toMatch(/invalid entry_date.*created_at day/);
     expect(summary.warnings.join("\n")).toMatch(/invalid duration/);
+    expect(summary.warnings.join("\n")).toMatch(/Revenue.*income/);
+    expect(summary.warnings.join("\n")).toMatch(/stored total 11 replaced with computed 22/);
   });
 
   it("is idempotent and converges on the source's newest values", () => {
@@ -172,6 +219,8 @@ describe("runMissionControlImport", () => {
     expect(second.clients.updated).toBe(5);
     expect(second.projects.inserted).toBe(0);
     expect(second.timeEntries).toEqual({ inserted: 0, updated: 3, skipped: 1 });
+    expect(second.expenses).toEqual({ inserted: 0, updated: 3, skipped: 1 });
+    expect(second.mileageEntries).toEqual({ inserted: 0, updated: 1, skipped: 0 });
 
     const clients = listClients(dash, { includeArchived: true });
     expect(clients.filter((c) => c.name === "Acme")).toHaveLength(1);

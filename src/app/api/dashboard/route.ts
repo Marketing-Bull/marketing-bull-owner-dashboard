@@ -10,7 +10,7 @@ import { getDatabase, loadDashboardState } from "@/lib/dashboard-state";
 import { reportFallback } from "@/lib/fallback";
 import { SAMPLE_DASHBOARD_DATA } from "@/lib/sample-data";
 import { buildLocalHoursWindows } from "@/lib/time-entries";
-import type { DashboardData, PriorityBucket, UpNextTask } from "@/lib/types";
+import type { ClickUpSourceEntry, ClickUpSourceInfo, DashboardData, PriorityBucket, UpNextTask } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +23,37 @@ type BottleneckContext = {
 type ClickUpTasksResponse = {
   tasks: ClickUpTaskCacheInput[];
 };
+
+function taskContext(task: ClickUpTaskCacheInput): string {
+  const parts = [task.projectName, task.clientName, task.list?.name].filter(
+    (value, index, values): value is string => Boolean(value) && values.indexOf(value) === index
+  );
+  return parts.join(" · ") || task.status?.status || "Unassigned ClickUp task";
+}
+
+function sourceEntries(
+  tasks: ClickUpTaskCacheInput[],
+  pick: (task: ClickUpTaskCacheInput) => { id?: string; name?: string } | undefined
+): ClickUpSourceEntry[] {
+  const grouped = new Map<string, ClickUpSourceEntry>();
+  for (const task of tasks) {
+    const source = pick(task);
+    if (!source?.name) continue;
+    const id = source.id || source.name;
+    const existing = grouped.get(id);
+    if (existing) existing.taskCount += 1;
+    else grouped.set(id, { id, name: source.name, taskCount: 1 });
+  }
+  return [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function buildClickUpSources(tasks: ClickUpTaskCacheInput[]): ClickUpSourceInfo {
+  return {
+    selection: "All open tasks assigned to the configured user across the ClickUp workspace",
+    spaces: sourceEntries(tasks, (task) => task.space),
+    lists: sourceEntries(tasks, (task) => task.list)
+  };
+}
 
 function parsePriority(task: ClickUpTaskCacheInput): UpNextTask["priority"] {
   const nameMatch = task.name.match(/\[(P[0-3])\]/i);
@@ -152,7 +183,7 @@ function buildPriorityBuckets(tasks: ClickUpTaskCacheInput[]): PriorityBucket[] 
     bucket.projects.push({
       id: task.id,
       title: task.name.replace(/^\[(P[0-3])\]\s*/i, ""),
-      subtitle: task.list?.name || task.status?.status || "ClickUp",
+      subtitle: taskContext(task),
       status: task.status?.status,
       href: task.url
     });
@@ -181,8 +212,8 @@ function buildUpNext(tasks: ClickUpTaskCacheInput[], context?: BottleneckContext
       title: task.name.replace(/^\[(P[0-3])\]\s*/i, ""),
       subtitle:
         context && context.bottleneck.trim()
-          ? `${task.list?.name || task.status?.status || "ClickUp"} · clears: ${context.bottleneck}`
-          : task.list?.name || task.status?.status || "ClickUp",
+          ? `${taskContext(task)} · clears: ${context.bottleneck}`
+          : taskContext(task),
       due: formatDueLabel(task.due_date),
       priority: parsePriority(task),
       done: false,
@@ -248,12 +279,19 @@ export async function GET() {
       async () => {
         const apiKey = await getClickUpApiKey();
         if (!apiKey) throw new Error("Missing ClickUp API key");
-        const tasksResponse = await fetchClickUpJson<ClickUpTasksResponse>(
-          `/team/${teamId}/task`,
-          taskParams,
-          apiKey
-        );
-        return tasksResponse.tasks || [];
+        const tasks: ClickUpTaskCacheInput[] = [];
+        for (let page = 0; page < 100; page += 1) {
+          taskParams.set("page", String(page));
+          const tasksResponse = await fetchClickUpJson<ClickUpTasksResponse>(
+            `/team/${teamId}/task`,
+            taskParams,
+            apiKey
+          );
+          const pageTasks = tasksResponse.tasks || [];
+          tasks.push(...pageTasks);
+          if (pageTasks.length < 100) break;
+        }
+        return tasks;
       }
     );
 
@@ -278,7 +316,8 @@ export async function GET() {
       upNext: buildUpNext(tasks, context),
       source: "live",
       generatedAt: Date.now(),
-      clickUpSync: sync.sync
+      clickUpSync: sync.sync,
+      clickUpSources: buildClickUpSources(tasks)
     };
 
     return NextResponse.json(liveData, {

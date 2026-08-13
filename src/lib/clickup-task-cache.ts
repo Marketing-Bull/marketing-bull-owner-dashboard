@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { describeError } from "@/lib/fallback";
+import { listClients, listProjects } from "@/lib/entities";
+import {
+  resolveClickUpTaskAssociation,
+  type ClickUpAssociationSource
+} from "@/lib/clickup-task-association";
 import type { ClickUpSyncInfo } from "@/lib/types";
 
 export const CLICKUP_TASK_SYNC_SOURCE = "assigned_tasks";
@@ -21,7 +26,20 @@ export type ClickUpTaskCacheInput = {
     id?: string;
     name?: string;
   };
+  folder?: { id?: string; name?: string };
+  space?: { id?: string; name?: string };
+  tags?: Array<{ name?: string }>;
+  custom_fields?: Array<{
+    name?: string;
+    value?: unknown;
+    type_config?: { options?: Array<{ id?: string | number; name?: string; label?: string }> };
+  }>;
   task_type?: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
+  projectId?: string | null;
+  projectName?: string | null;
+  associationSource?: ClickUpAssociationSource;
 };
 
 type SyncRow = {
@@ -43,10 +61,21 @@ type TaskRow = {
   status: string | null;
   list_id: string | null;
   list_name: string | null;
+  folder_id: string | null;
+  folder_name: string | null;
+  space_id: string | null;
+  space_name: string | null;
+  client_id: string | null;
+  client_name: string | null;
+  project_id: string | null;
+  project_name: string | null;
+  association_source: ClickUpAssociationSource | null;
   task_type: string | null;
   raw_json: string;
   synced_at: string;
 };
+
+type CachedAssociationRow = Pick<TaskRow, "id" | "name" | "raw_json">;
 
 export type ClickUpTaskSyncResult = {
   tasks: ClickUpTaskCacheInput[];
@@ -74,7 +103,14 @@ function syncRowToInfo(row: SyncRow | null, refreshed: boolean, now: Date, error
 }
 
 function taskRowToInput(row: TaskRow): ClickUpTaskCacheInput {
+  let raw: ClickUpTaskCacheInput = { id: row.id, name: row.name };
+  try {
+    raw = JSON.parse(row.raw_json) as ClickUpTaskCacheInput;
+  } catch {
+    // The selected columns below are the durable fallback for a damaged blob.
+  }
   return {
+    ...raw,
     id: row.id,
     name: row.name,
     url: row.url ?? undefined,
@@ -89,8 +125,33 @@ function taskRowToInput(row: TaskRow): ClickUpTaskCacheInput {
             name: row.list_name ?? undefined
           }
         : undefined,
-    task_type: row.task_type
+    folder:
+      row.folder_id || row.folder_name
+        ? { id: row.folder_id ?? undefined, name: row.folder_name ?? undefined }
+        : raw.folder,
+    space:
+      row.space_id || row.space_name
+        ? { id: row.space_id ?? undefined, name: row.space_name ?? undefined }
+        : raw.space,
+    task_type: row.task_type,
+    clientId: row.client_id,
+    clientName: row.client_name,
+    projectId: row.project_id,
+    projectName: row.project_name,
+    associationSource: row.association_source ?? "none"
   };
+}
+
+function cachedAssociationRowToInput(row: CachedAssociationRow): ClickUpTaskCacheInput {
+  try {
+    return {
+      ...(JSON.parse(row.raw_json) as ClickUpTaskCacheInput),
+      id: row.id,
+      name: row.name
+    };
+  } catch {
+    return { id: row.id, name: row.name };
+  }
 }
 
 export function getClickUpTaskSyncRow(db: DatabaseSync): SyncRow | null {
@@ -111,10 +172,32 @@ export function getClickUpTaskSyncInfo(db: DatabaseSync, now: Date = new Date())
   return syncRowToInfo(getClickUpTaskSyncRow(db), false, now);
 }
 
+export function reassociateCachedClickUpTasks(db: DatabaseSync): void {
+  const rows = db.prepare("SELECT id, name, raw_json FROM clickup_tasks").all() as CachedAssociationRow[];
+  if (rows.length === 0) return;
+
+  const clients = listClients(db, { includeArchived: true });
+  const projects = listProjects(db, { includeArchived: true });
+  const update = db.prepare(`
+    UPDATE clickup_tasks
+    SET client_id = ?, project_id = ?, association_source = ?
+    WHERE id = ?
+  `);
+
+  for (const row of rows) {
+    const association = resolveClickUpTaskAssociation(cachedAssociationRowToInput(row), clients, projects);
+    update.run(association.clientId, association.projectId, association.source, row.id);
+  }
+}
+
 export function listCachedClickUpTasks(db: DatabaseSync): ClickUpTaskCacheInput[] {
+  reassociateCachedClickUpTasks(db);
   const rows = db
     .prepare(
-      `SELECT * FROM clickup_tasks
+      `SELECT t.*, c.name AS client_name, p.name AS project_name
+       FROM clickup_tasks t
+       LEFT JOIN clients c ON c.id = t.client_id
+       LEFT JOIN projects p ON p.id = t.project_id
        ORDER BY
          CASE WHEN due_date IS NULL OR due_date = '' THEN 1 ELSE 0 END,
          CAST(due_date AS INTEGER),
@@ -131,18 +214,22 @@ export function replaceCachedClickUpTasks(
   syncedAt: Date = new Date()
 ): void {
   const syncedAtIso = nowIso(syncedAt);
+  const clients = listClients(db, { includeArchived: true });
+  const projects = listProjects(db, { includeArchived: true });
   db.exec("BEGIN");
   try {
     db.prepare("DELETE FROM clickup_tasks").run();
     const insert = db.prepare(`
       INSERT INTO clickup_tasks (
         id, name, url, due_date, date_updated, priority, status, list_id, list_name,
-        task_type, raw_json, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        folder_id, folder_name, space_id, space_name, client_id, project_id,
+        association_source, task_type, raw_json, synced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const task of tasks) {
       if (!task.id || !task.name) continue;
+      const association = resolveClickUpTaskAssociation(task, clients, projects);
       insert.run(
         task.id,
         task.name,
@@ -153,6 +240,13 @@ export function replaceCachedClickUpTasks(
         optionalText(task.status?.status),
         optionalText(task.list?.id),
         optionalText(task.list?.name),
+        optionalText(task.folder?.id),
+        optionalText(task.folder?.name),
+        optionalText(task.space?.id),
+        optionalText(task.space?.name),
+        association.clientId,
+        association.projectId,
+        association.source,
         optionalText(task.task_type),
         JSON.stringify(task),
         syncedAtIso

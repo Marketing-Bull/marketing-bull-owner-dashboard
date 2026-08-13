@@ -1,12 +1,57 @@
-import { PlaceholderScreen } from "@/components/placeholder-screen";
+"use client";
 
-export default function MileagePage() {
-  return (
-    <PlaceholderScreen
-      eyebrow="Marketing Bull / Tracking"
-      title="Mileage"
-      phase="Phase 4"
-      description="Trip logging with round-trip doubling, a recent-trips picker, and reimbursement at the IRS rate from settings. Mission-control's entry UX (Maps address autocomplete, auto-distance) is the reference implementation."
-    />
-  );
+import { useEffect, useMemo, useState } from "react";
+import { CarFront, LoaderCircle, MapPin, Plus } from "lucide-react";
+import styles from "../entities.module.css";
+import type { Client, MileageEntry, MileageRecentTrip, Project } from "@/lib/types";
+
+function redirected(response: Response): boolean { if(response.status!==401)return false;
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`); return true; }
+function todayKey(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`}
+function money(n:number){return new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:2}).format(n)}
+function friendlyDate(v:string){const d=new Date(`${v}T12:00:00`);return Number.isFinite(d.getTime())?new Intl.DateTimeFormat("en-US",{month:"short",day:"numeric",year:"numeric"}).format(d):v}
+
+type Values={date:string;tripName:string;startAddress:string;endAddress:string;miles:string;roundTrip:boolean;clientId:string;projectId:string;billable:boolean;purpose:string;notes:string};
+function blank():Values{return{date:todayKey(),tripName:"",startAddress:"",endAddress:"",miles:"",roundTrip:false,clientId:"",projectId:"",billable:false,purpose:"",notes:""}}
+function toForm(e:MileageEntry):Values{return{date:e.date,tripName:e.tripName,startAddress:e.startAddress,endAddress:e.endAddress,miles:String(e.miles),roundTrip:e.roundTrip,clientId:e.clientId||"",projectId:e.projectId||"",billable:e.billable,purpose:e.purpose,notes:e.notes}}
+function payload(v:Values){return{...v,miles:Number(v.miles),clientId:v.clientId||null,projectId:v.projectId||null}}
+function applyRecent(v:Values,r:MileageRecentTrip):Values{return{...v,tripName:r.tripName,startAddress:r.startAddress,endAddress:r.endAddress,miles:String(r.miles),roundTrip:r.roundTrip,purpose:r.purpose}}
+
+function MileageForm({initial,clients,projects,recent,busy,label,onSubmit,onCancel}:{initial:Values;clients:Client[];projects:Project[];recent:MileageRecentTrip[];busy:boolean;label:string;onSubmit:(v:Values)=>void;onCancel:()=>void}){
+  const[v,setV]=useState(initial);const selectable=projects.filter((p)=>!v.clientId||p.clientId===v.clientId||p.id===v.projectId);const total=(Number(v.miles)||0)*(v.roundTrip?2:1);
+  return <><div className={styles.recentTrips}>{recent.map((r,i)=><button type="button" className={styles.recentTrip} key={`${r.startAddress}-${r.endAddress}-${r.roundTrip}-${r.miles}-${i}`} onClick={()=>setV((x)=>applyRecent(x,r))}><strong>{r.tripName||`${r.startAddress} → ${r.endAddress}`}</strong><div className={styles.rowMeta}>{r.miles} mi{r.roundTrip?" each way · round trip":""}</div></button>)}</div>
+  <form className={styles.form} onSubmit={(e)=>{e.preventDefault();onSubmit(v)}}>
+    <label className={styles.field}><span className={styles.label}>Date</span><input className={styles.input} type="date" value={v.date} onChange={(e)=>setV({...v,date:e.target.value})} required/></label>
+    <label className={styles.field}><span className={styles.label}>Trip name</span><input className={styles.input} value={v.tripName} onChange={(e)=>setV({...v,tripName:e.target.value})} placeholder="Office to client" autoFocus/></label>
+    <label className={`${styles.field} ${styles.fieldWide}`}><span className={styles.label}>Start address</span><input className={styles.input} value={v.startAddress} onChange={(e)=>setV({...v,startAddress:e.target.value})}/></label>
+    <label className={`${styles.field} ${styles.fieldWide}`}><span className={styles.label}>End address</span><input className={styles.input} value={v.endAddress} onChange={(e)=>setV({...v,endAddress:e.target.value})}/></label>
+    <label className={styles.field}><span className={styles.label}>One-way miles</span><input className={styles.input} type="number" min="0.01" max="10000" step="0.01" value={v.miles} onChange={(e)=>setV({...v,miles:e.target.value})} required/></label>
+    <label className={styles.checkboxField}><input type="checkbox" checked={v.roundTrip} onChange={(e)=>setV({...v,roundTrip:e.target.checked})}/> Round trip</label>
+    <div className={styles.field}><span className={styles.label}>Total miles</span><div className={styles.readonlyValue}>{total.toFixed(2)} mi — computed on save</div></div>
+    <label className={styles.field}><span className={styles.label}>Client</span><select className={styles.select} value={v.clientId} onChange={(e)=>setV({...v,clientId:e.target.value,projectId:""})}><option value="">Unassigned</option>{clients.map((c)=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+    <label className={styles.field}><span className={styles.label}>Project</span><select className={styles.select} value={v.projectId} onChange={(e)=>{const p=projects.find((x)=>x.id===e.target.value);setV({...v,projectId:e.target.value,clientId:p?.clientId||v.clientId})}}><option value="">No project</option>{selectable.map((p)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+    <label className={styles.checkboxField}><input type="checkbox" checked={v.billable} onChange={(e)=>setV({...v,billable:e.target.checked})}/> Billable</label>
+    <label className={`${styles.field} ${styles.fieldWide}`}><span className={styles.label}>Purpose</span><input className={styles.input} value={v.purpose} onChange={(e)=>setV({...v,purpose:e.target.value})} placeholder="Client meeting"/></label>
+    <label className={`${styles.field} ${styles.fieldWide}`}><span className={styles.label}>Notes</span><textarea className={styles.textarea} value={v.notes} onChange={(e)=>setV({...v,notes:e.target.value})}/></label>
+    <div className={styles.formActions}><button className={styles.button} disabled={busy||!v.date||!(Number(v.miles)>0)}>{busy?"Saving…":label}</button><button type="button" className={`${styles.button} ${styles.buttonQuiet}`} onClick={onCancel}>Cancel</button></div>
+  </form></>
+}
+
+export default function MileagePage(){
+  const[entries,setEntries]=useState<MileageEntry[]|null>(null);const[recent,setRecent]=useState<MileageRecentTrip[]>([]);const[rate,setRate]=useState(0.67);const[rateInput,setRateInput]=useState("0.67");
+  const[summary,setSummary]=useState({totalMiles:0,reimbursement:0,entries:0});const[clients,setClients]=useState<Client[]>([]);const[projects,setProjects]=useState<Project[]>([]);const[creating,setCreating]=useState(false);const[editing,setEditing]=useState<string|null>(null);const[busy,setBusy]=useState(false);const[error,setError]=useState<string|null>(null);
+  async function load(){try{const[a,b,c]=await Promise.all([fetch("/api/mileage?limit=1000",{cache:"no-store"}),fetch("/api/clients?includeArchived=1",{cache:"no-store"}),fetch("/api/projects?includeArchived=1",{cache:"no-store"})]);if([a,b,c].some(redirected))return;const[aj,bj,cj]=await Promise.all([a.json(),b.json(),c.json()]);if(!a.ok)throw new Error(aj.error||"Mileage fetch failed");setEntries(aj.mileageEntries||[]);setRecent(aj.recentTrips||[]);setRate(aj.mileageRate??0.67);setRateInput(String(aj.mileageRate??0.67));setSummary(aj.summary||{totalMiles:0,reimbursement:0,entries:0});setClients(bj.clients||[]);setProjects(cj.projects||[])}catch(e){setError(e instanceof Error?e.message:String(e));setEntries([])}}
+  useEffect(()=>{const run=async()=>{await load()};void run()},[]);
+  async function submit(method:string,path:string,body?:unknown){setBusy(true);setError(null);try{const r=await fetch(path,{method,headers:body===undefined?undefined:{"Content-Type":"application/json"},body:body===undefined?undefined:JSON.stringify(body)});if(redirected(r))return false;const j=await r.json().catch(()=>null);if(!r.ok)throw new Error(j?.error||`${method} failed`);await load();return true}catch(e){setError(e instanceof Error?e.message:String(e));return false}finally{setBusy(false)}}
+  const clientById=useMemo(()=>new Map(clients.map((x)=>[x.id,x.name])),[clients]);const projectById=useMemo(()=>new Map(projects.map((x)=>[x.id,x.name])),[projects]);
+  return <main className={styles.page}><div className={styles.shell}>
+    <header className={styles.header}><div><p className={styles.eyebrow}>Marketing Bull / Tracking</p><h1 className={styles.title}>Mileage</h1></div><button className={styles.button} onClick={()=>setCreating((x)=>!x)}><Plus size={15}/>Log trip</button></header>
+    {error?<p className={styles.error}>{error}</p>:null}
+    <section className={styles.summaryGrid}><div className={styles.summaryItem}><span className={styles.label}>Trips</span><strong className={styles.summaryValue}>{summary.entries}</strong></div><div className={styles.summaryItem}><span className={styles.label}>Total miles</span><strong className={styles.summaryValue}>{summary.totalMiles.toFixed(1)}</strong></div><div className={styles.summaryItem}><span className={styles.label}>Rate</span><strong className={styles.summaryValue}>{money(rate)}/mi</strong></div><div className={styles.summaryItem}><span className={styles.label}>Reimbursement</span><strong className={styles.summaryValue}>{money(summary.reimbursement)}</strong></div></section>
+    <section className={styles.card}><div className={styles.rowHead}><div><div className={styles.rowTitle}>Mileage reimbursement rate</div><div className={styles.rowMeta}>Used for the reimbursement estimate; editable without changing stored miles.</div></div><div className={styles.filterRow}><input className={`${styles.input} ${styles.compactInput}`} type="number" min="0" max="10" step="0.01" value={rateInput} onChange={(e)=>setRateInput(e.target.value)}/><button className={styles.button} disabled={busy} onClick={()=>void submit("PUT","/api/mileage/settings",{mileageRate:Number(rateInput)})}>Save rate</button></div></div></section>
+    {creating?<section className={styles.card}><MileageForm initial={blank()} clients={clients} projects={projects} recent={recent} busy={busy} label="Save trip" onCancel={()=>setCreating(false)} onSubmit={async(v)=>{if(await submit("POST","/api/mileage",payload(v)))setCreating(false)}}/></section>:null}
+    <section className={styles.card}>{entries===null?<div className={styles.loader}><LoaderCircle size={15}/>Loading mileage…</div>:entries.length===0?<div className={styles.empty}>No mileage entries yet.</div>:<div className={styles.list}>{entries.map((e)=><div className={styles.row} key={e.id}><div className={styles.rowHead}><div><div className={styles.rowTitle}>{e.tripName||`${e.startAddress||"Start"} → ${e.endAddress||"End"}`}</div><div className={styles.rowMeta}>{[friendlyDate(e.date),`${e.totalMiles} mi`,e.roundTrip?"round trip":"one way",money(e.totalMiles*rate),e.projectId?projectById.get(e.projectId):e.clientId?clientById.get(e.clientId):null].filter(Boolean).join(" · ")}</div>{e.purpose?<p className={styles.rowDetails}>{e.purpose}</p>:null}</div><div className={styles.rowActions}><span className={`${styles.statusChip} ${e.billable?styles.statusActive:""}`}>{e.billable?"billable":"business"}</span><button className={`${styles.button} ${styles.buttonQuiet}`} onClick={()=>setEditing(editing===e.id?null:e.id)}>Edit</button><button className={`${styles.button} ${styles.buttonDanger}`} disabled={busy} onClick={()=>{if(confirm("Delete this trip? This cannot be undone."))void submit("DELETE",`/api/mileage/${e.id}`)}}>Delete</button></div></div>{editing===e.id?<MileageForm key={e.updatedAt} initial={toForm(e)} clients={clients} projects={projects} recent={recent} busy={busy} label="Save changes" onCancel={()=>setEditing(null)} onSubmit={async(v)=>{if(await submit("PUT",`/api/mileage/${e.id}`,payload(v)))setEditing(null)}}/>:null}</div>)}</div>}</section>
+    <p className={styles.footerNote}><CarFront size={14}/> Round-trip totals are computed and stored. <MapPin size={14}/> Recent routes can prefill the next trip.</p>
+  </div></main>
 }

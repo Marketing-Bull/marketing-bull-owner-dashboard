@@ -9,6 +9,7 @@
 
 import type {
   ClickUpProject,
+  ClickUpSourceInfo,
   ClickUpSyncInfo,
   DashboardData,
   HoursEntry,
@@ -114,6 +115,31 @@ function normalizeClickUpSync(value: unknown): ClickUpSyncInfo | undefined {
   };
 }
 
+function normalizeSourceEntries(value: unknown): ClickUpSourceInfo["lists"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry, index) => {
+    const item = asRecord(entry);
+    const name = asString(item.name);
+    if (!name) return [];
+    const taskCount = Number(item.taskCount);
+    return [{
+      id: asString(item.id) || `source-${index}`,
+      name,
+      taskCount: Number.isFinite(taskCount) ? taskCount : 0
+    }];
+  });
+}
+
+function normalizeClickUpSources(value: unknown): ClickUpSourceInfo | undefined {
+  const item = asRecord(value);
+  if (Object.keys(item).length === 0) return undefined;
+  return {
+    selection: asString(item.selection, "All open tasks assigned to the configured ClickUp user"),
+    spaces: normalizeSourceEntries(item.spaces),
+    lists: normalizeSourceEntries(item.lists)
+  };
+}
+
 export function normalizeDashboardData(value: unknown): DashboardData {
   const root = asRecord(value);
   const hours = asRecord(root.hours);
@@ -122,6 +148,7 @@ export function normalizeDashboardData(value: unknown): DashboardData {
   return {
     priorities: normalizePriorities(root.priorities),
     hours: {
+      day: normalizeHoursEntries(hours.day),
       week: normalizeHoursEntries(hours.week),
       month: normalizeHoursEntries(hours.month)
     },
@@ -129,6 +156,7 @@ export function normalizeDashboardData(value: unknown): DashboardData {
     source: root.source === "live" ? "live" : "sample",
     generatedAt: Number.isFinite(generatedAt) ? generatedAt : undefined,
     clickUpSync: normalizeClickUpSync(root.clickUpSync),
+    clickUpSources: normalizeClickUpSources(root.clickUpSources),
     fallbackReason: asOptionalString(root.fallbackReason)
   };
 }

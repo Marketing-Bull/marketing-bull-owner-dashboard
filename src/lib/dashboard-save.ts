@@ -19,6 +19,7 @@ export type DashboardStatePayload = {
   manual: ManualState;
   widgetOrder: WidgetId[];
   collapsed: CollapsibleId[];
+  hiddenWidgets: WidgetId[];
 };
 
 /**
@@ -30,7 +31,8 @@ export function serializeState(payload: DashboardStatePayload): string {
   return JSON.stringify({
     manual: payload.manual,
     widgetOrder: payload.widgetOrder,
-    collapsed: payload.collapsed
+    collapsed: payload.collapsed,
+    hiddenWidgets: payload.hiddenWidgets
   });
 }
 

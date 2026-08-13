@@ -117,17 +117,25 @@ describe("time entries", () => {
     expect(() => deleteTimeEntry(db, recent.id)).toThrow(/no such/i);
   });
 
-  it("builds week and calendar-month dashboard rollups from local entries", () => {
+  it("builds day, week, and calendar-month dashboard rollups from local entries", () => {
     const db = freshDb();
     const client = createClient(db, { name: "Acme" });
     const site = createProject(db, { name: "Site", clientId: client.id });
     const ads = createProject(db, { name: "Ads", clientId: client.id });
     createTimeEntry(db, { projectId: site.id, date: "2026-08-10", hours: 2 });
+    createTimeEntry(db, { projectId: ads.id, date: "2026-08-13", hours: 1.5 });
     createTimeEntry(db, { projectId: site.id, date: "2026-08-01", hours: 3 });
     createTimeEntry(db, { projectId: ads.id, date: "2026-07-31", hours: 4 });
 
     const windows = buildLocalHoursWindows(db, new Date(2026, 7, 13, 12));
-    expect(windows.week).toEqual([{ label: "Site", hours: 2 }]);
-    expect(windows.month).toEqual([{ label: "Site", hours: 5 }]);
+    expect(windows.day).toEqual([{ label: "Ads", hours: 1.5 }]);
+    expect(windows.week).toEqual([
+      { label: "Site", hours: 2 },
+      { label: "Ads", hours: 1.5 }
+    ]);
+    expect(windows.month).toEqual([
+      { label: "Site", hours: 5 },
+      { label: "Ads", hours: 1.5 }
+    ]);
   });
 });
