@@ -5,8 +5,14 @@
 -- survives the loss of that machine — the daily `VACUUM INTO` snapshots live
 -- on the same disk as the database they protect, which is not a backup.
 --
--- Apply once, in the Supabase SQL editor or via the CLI. It is idempotent:
--- re-running it adds nothing and drops nothing.
+-- Applied on 2026-08-14 to the `amb-auto-scheduler` project
+-- (`dfuhhgguzudkbwsabrjt`), which hosts this schema alongside its own `public`
+-- tables because the free plan caps the org at two projects. The schema
+-- boundary is the whole isolation story: nothing here references the
+-- scheduler's tables, and its anon key has no grant on this schema.
+--
+-- Idempotent: re-running it adds nothing and drops nothing, so pointing it at
+-- a dedicated project later is a copy-paste.
 --
 -- Deliberate omissions:
 --   * `clickup_tasks`, `clickup_sync_state`, `mileage_route_cache` — caches,

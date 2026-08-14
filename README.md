@@ -402,22 +402,30 @@ migration.
 The daily snapshots below are real backups of a real database that sit on the
 same disk as the database they protect. One dead disk takes all fifteen copies.
 `npm run backup:supabase` closes that by pushing the whole store to an
-`owner_dashboard` schema in the `MarketingBull-Master-DB` Supabase project.
+`owner_dashboard` schema in Supabase.
 
 SQLite stays the system of record. The mirror is a copy — queryable from
 anywhere, and the shape the phase-D2 Supabase sync was always meant to take.
 
+**Where it lives.** The `amb-auto-scheduler` project
+(`dfuhhgguzudkbwsabrjt`, us-east-1), in its own `owner_dashboard` schema
+rather than a project of its own: the Supabase org is on the free plan, which
+caps it at two projects, and both were spoken for. The schema boundary is what
+keeps the arrangement honest — nothing here touches the scheduler's `public`
+tables, and its anon key cannot read a row of this schema.
+
 **One-time setup**
 
-1. Apply [`supabase/owner-dashboard-mirror.sql`](supabase/owner-dashboard-mirror.sql)
-   in the Supabase SQL editor. It is idempotent.
+1. ~~Apply [`supabase/owner-dashboard-mirror.sql`](supabase/owner-dashboard-mirror.sql)~~
+   — done on 2026-08-14; all 14 tables exist with RLS enabled. The file is
+   idempotent, so re-running it against a replacement project is safe.
 2. Add `owner_dashboard` to Project Settings → API → **Exposed schemas**, or
    PostgREST answers `PGRST106` and the script says so in as many words.
 3. Put the credentials somewhere root-owned — the systemd unit, or a file that
    is not this repo. The service-role key is full access to the project:
 
    ```bash
-   SUPABASE_URL=https://<ref>.supabase.co
+   SUPABASE_URL=https://dfuhhgguzudkbwsabrjt.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=<service role key>
    ```
 
