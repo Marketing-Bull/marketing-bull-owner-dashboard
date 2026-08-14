@@ -23,6 +23,7 @@ import {
   Clock3,
   ExternalLink,
   FolderKanban,
+  Gauge,
   LayoutDashboard,
   ListTodo,
   Menu,
@@ -51,6 +52,7 @@ const SECTIONS: NavSection[] = [
   {
     label: "Operate",
     items: [
+      { href: "/command", label: "Command Center", icon: <Gauge size={16} /> },
       { href: "/", label: "Dashboard", icon: <LayoutDashboard size={16} /> },
       { href: "/clients", label: "Clients", icon: <Users size={16} /> },
       { href: "/projects", label: "Projects", icon: <FolderKanban size={16} /> }
