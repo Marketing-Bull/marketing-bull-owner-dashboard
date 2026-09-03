@@ -5,8 +5,10 @@
  * strings somebody types in, and the numbers are only as true as the last time
  * they were retyped. Since phases 2-4 the app owns clients, projects, time,
  * expenses, recurring costs, accounting references, and mileage, so the money
- * and the workload can be *computed* instead. Nothing in this module reads
- * `dashboard_state`: every figure below traces back to a row in a ledger.
+ * and the workload can be *computed* instead. Every figure below traces back
+ * to a row in a ledger, with one deliberate exception: the typed `mrr.current`
+ * is read from `dashboard_state` — never shown as a figure of its own, only
+ * held up against the derived MRR so a disagreement is visible.
  *
  * Everything is assembled server-side in one pass. The alternative — five
  * fetches and a pile of client-side reducers, which is how the old screen grew
@@ -17,8 +19,11 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
+import { getClickUpTaskSyncInfo } from "@/lib/clickup-task-cache";
+import { queryClickUpTasks } from "@/lib/clickup-tasks";
 import { todayKey } from "@/lib/history";
 import { getMileageRate } from "@/lib/mileage";
+import type { ClickUpTaskRecord } from "@/lib/types";
 
 export const COMMAND_PERIODS = ["mtd", "last-month", "qtd", "ytd"] as const;
 export type CommandPeriodKey = (typeof COMMAND_PERIODS)[number];
@@ -66,6 +71,15 @@ export type MoneyBand = {
   recurringCount: number;
   /** What the retainer book has to cover before an hour is worked. */
   fixedCoverage: number | null;
+  /** The classic dashboard's hand-typed `mrr.current`; null when blank. */
+  typedMrr: number | null;
+  /**
+   * How far the client rows and the typed figure disagree, or null when they
+   * agree within tolerance or there is nothing to compare. The scope doc's
+   * warning made concrete: the derived figure must not quietly replace the
+   * typed one while the client records are stale.
+   */
+  mrrGap: number | null;
 };
 
 export type WorkBand = {
@@ -178,6 +192,35 @@ export type ActivityItem = {
   href: string;
 };
 
+/** The fields the screen needs from a cached task; the Tasks ledger keeps the rest. */
+export type TaskBrief = {
+  id: string;
+  name: string;
+  url: string | null;
+  /** Epoch ms as ClickUp reports it; null when undated. */
+  dueDate: number | null;
+  priority: string | null;
+  clientName: string | null;
+  projectName: string | null;
+  listName: string | null;
+};
+
+export type TaskBand = {
+  open: number;
+  /** Due before now — the Tasks screen's definition, kept identical here. */
+  overdue: number;
+  dueToday: number;
+  /** Due within the next seven days, counted from now. */
+  dueSoon: number;
+  /** Soonest due first, undated last. */
+  next: TaskBrief[];
+  /** Longest overdue first — what the attention rule names. */
+  mostOverdue: TaskBrief[];
+  lastSyncedAt: string | null;
+  stale: boolean;
+  syncError: string | null;
+};
+
 export type CadenceSnapshot = {
   hoursToday: number;
   hoursThisWeek: number;
@@ -199,6 +242,7 @@ export type CommandCenterPayload = {
   clients: ClientRollup[];
   projects: ProjectRollup[];
   activity: ActivityItem[];
+  tasks: TaskBand;
   attention: AttentionItem[];
   tax: TaxSnapshot;
   cadence: CadenceSnapshot;
@@ -217,6 +261,39 @@ export const RECEIPT_THRESHOLD = 75;
 
 /** A client with no time, money, or trip against it for this long is drifting. */
 export const SILENT_CLIENT_DAYS = 30;
+
+/** Client-row MRR and the typed figure may differ by this share before it is a finding… */
+export const MRR_MISMATCH_TOLERANCE = 0.1;
+/** …and by at least this much in dollars, so a $40 rounding gap stays quiet. */
+export const MRR_MISMATCH_FLOOR = 100;
+
+/**
+ * The classic dashboard stores money as whatever was typed — "42500",
+ * "$42,500", "42,500/mo". Anything that is not a positive number is treated as
+ * blank rather than as zero, since a blank field is not a claim.
+ */
+export function parseTypedMoney(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const cleaned = value.replace(/[^0-9.-]/g, "");
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/**
+ * The gap between derived and typed MRR when it is worth raising, else null.
+ *
+ * Null when either side is missing or when no client rows exist at all — on
+ * an empty database the typed figure is the sample default and there is
+ * nothing to reconcile it against.
+ */
+export function mrrGapAmount(committedMrr: number, typedMrr: number | null, clientCount: number): number | null {
+  if (typedMrr === null || clientCount <= 0) return null;
+  const gap = Math.abs(committedMrr - typedMrr);
+  const scale = Math.max(committedMrr, typedMrr);
+  if (scale <= 0 || gap < MRR_MISMATCH_FLOOR || gap / scale < MRR_MISMATCH_TOLERANCE) return null;
+  return money(gap);
+}
 
 const MONTHS_OF_TREND = 12;
 
@@ -499,7 +576,15 @@ function moneyBand(db: DatabaseSync, period: CommandPeriod): MoneyBand {
     .prepare("SELECT amount, frequency FROM recurring_expenses WHERE status = 'active'")
     .all() as Row[];
 
+  const typedRow = db
+    .prepare("SELECT mrr_current FROM dashboard_state WHERE id = 1")
+    .get() as Row | undefined;
+  const clientCount = num(
+    (db.prepare("SELECT COUNT(*) AS count FROM clients WHERE is_archived = 0").get() as Row).count
+  );
+
   const committedMrr = money(num(clientRow.mrr));
+  const typedMrr = parseTypedMoney(typedRow?.mrr_current);
   const fixedMonthlyCost = monthlyRecurringCost(
     recurringRows.map((row) => ({ amount: num(row.amount), frequency: text(row.frequency) }))
   );
@@ -517,7 +602,9 @@ function moneyBand(db: DatabaseSync, period: CommandPeriod): MoneyBand {
     mrrClients: num(clientRow.clients),
     fixedMonthlyCost,
     recurringCount: recurringRows.length,
-    fixedCoverage: fixedMonthlyCost > 0 ? committedMrr / fixedMonthlyCost : null
+    fixedCoverage: fixedMonthlyCost > 0 ? committedMrr / fixedMonthlyCost : null,
+    typedMrr,
+    mrrGap: mrrGapAmount(committedMrr, typedMrr, clientCount)
   };
 }
 
@@ -736,6 +823,61 @@ function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
   });
 }
 
+function toTaskBrief(task: ClickUpTaskRecord): TaskBrief {
+  return {
+    id: task.id,
+    name: task.name,
+    url: task.url,
+    dueDate: task.dueDate,
+    priority: task.priority,
+    clientName: task.clientName,
+    projectName: task.projectName,
+    listName: task.listName
+  };
+}
+
+/**
+ * Open ClickUp work, read from the local cache and never from ClickUp.
+ *
+ * The cache is what the Tasks screen refreshes. Reading it here instead of
+ * calling ClickUp keeps a slow or failing upstream from delaying the money
+ * figures; the price is freshness, so the band carries the sync time and the
+ * screen pokes `/api/tasks` on load so a stale cache refreshes in the
+ * background. The queries are the Tasks ledger's own, so "overdue" means the
+ * same thing on both screens.
+ */
+function taskBand(db: DatabaseSync, now: Date): TaskBand {
+  const base = { page: 1, sort: "due" as const, direction: "asc" as const };
+  const today = todayKey(now);
+  const upcoming = queryClickUpTasks(db, { ...base, pageSize: 6 }, now);
+  const overdue = queryClickUpTasks(db, { ...base, pageSize: 3, overdue: true }, now);
+  const dueToday = queryClickUpTasks(db, { ...base, pageSize: 1, dueFrom: today, dueTo: today }, now);
+  const sync = getClickUpTaskSyncInfo(db, now);
+
+  return {
+    open: upcoming.filteredTotals.tasks,
+    overdue: upcoming.filteredTotals.overdue,
+    dueToday: dueToday.filteredTotals.tasks,
+    dueSoon: upcoming.filteredTotals.dueSoon,
+    next: upcoming.items.map(toTaskBrief),
+    mostOverdue: overdue.items.map(toTaskBrief),
+    lastSyncedAt: sync.lastSyncedAt,
+    stale: sync.stale,
+    syncError: sync.error ?? null
+  };
+}
+
+function dayKeyOfMs(ms: number): string {
+  const date = new Date(ms);
+  return formatDayKey(date.getFullYear(), date.getMonth() + 1, date.getDate());
+}
+
+function formatSyncTime(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(ms);
+}
+
 function taxSnapshot(db: DatabaseSync, today: string): TaxSnapshot {
   const year = Number(today.slice(0, 4));
   const from = `${year}-01-01`;
@@ -886,8 +1028,10 @@ export function buildAttention(input: {
   projects: ProjectRollup[];
   tax: TaxSnapshot;
   cadence: CadenceSnapshot;
+  tasks: TaskBand;
+  money: Pick<MoneyBand, "committedMrr" | "typedMrr" | "mrrClients" | "mrrGap">;
 }): AttentionItem[] {
-  const { today, period, work, clients, projects, tax, cadence } = input;
+  const { today, period, work, clients, projects, tax, cadence, tasks, money: cash } = input;
   const items: AttentionItem[] = [];
 
   const overdue = clients.filter(
@@ -918,6 +1062,21 @@ export function buildAttention(input: {
       href: `/time?billable=true&rateMax=0&from=${period.from}&to=${period.to}`,
       actionLabel: "Review those entries",
       count: work.unratedBillableEntries
+    });
+  }
+
+  if (cash.mrrGap !== null && cash.typedMrr !== null) {
+    items.push({
+      id: "mrr-mismatch",
+      severity: "serious",
+      title: "Client MRR records disagree with the typed figure",
+      detail: `${formatMoney(cash.committedMrr)} across ${cash.mrrClients} active client ${plural(
+        cash.mrrClients,
+        "row"
+      )} against ${formatMoney(cash.typedMrr)} typed on the classic dashboard. Until each client's status and MRR is current, the Committed MRR tile is the sum of stale rows.`,
+      href: "/clients",
+      actionLabel: "Fix client records",
+      amount: cash.mrrGap
     });
   }
 
@@ -952,6 +1111,23 @@ export function buildAttention(input: {
       href: "/projects",
       actionLabel: "Open Projects",
       count: staleFocus.length
+    });
+  }
+
+  if (tasks.overdue > 0) {
+    const named = tasks.mostOverdue.map((task) => {
+      const days = task.dueDate === null ? 0 : daysBetween(dayKeyOfMs(task.dueDate), today) - 1;
+      return `${task.name} (${days <= 0 ? "earlier today" : `${days} ${plural(days, "day")}`})`;
+    });
+    const freshness = tasks.stale && tasks.lastSyncedAt ? ` Task cache from ${formatSyncTime(tasks.lastSyncedAt)}.` : "";
+    items.push({
+      id: "overdue-tasks",
+      severity: "serious",
+      title: `${tasks.overdue} ClickUp ${plural(tasks.overdue, "task")} overdue`,
+      detail: `${nameList(named)}.${freshness}`,
+      href: "/tasks?overdue=true&sort=due&direction=asc",
+      actionLabel: "Open Tasks",
+      count: tasks.overdue
     });
   }
 
@@ -1017,9 +1193,10 @@ export function buildAttention(input: {
 /** Everything the Command Center screen renders, in one read. */
 export function buildCommandCenter(
   db: DatabaseSync,
-  options: { period?: CommandPeriodKey; today?: string } = {}
+  options: { period?: CommandPeriodKey; today?: string; now?: Date } = {}
 ): CommandCenterPayload {
-  const today = options.today ?? todayKey();
+  const now = options.now ?? new Date();
+  const today = options.today ?? todayKey(now);
   const period = resolvePeriod(options.period ?? DEFAULT_COMMAND_PERIOD, today);
 
   const money = moneyBand(db, period);
@@ -1036,6 +1213,7 @@ export function buildCommandCenter(
   const projects = projectRollups(db, period);
   const tax = taxSnapshot(db, today);
   const cadence = cadenceSnapshot(db, today);
+  const tasks = taskBand(db, now);
 
   const counts = db
     .prepare(
@@ -1060,7 +1238,8 @@ export function buildCommandCenter(
     clients,
     projects,
     activity: recentActivity(db),
-    attention: buildAttention({ today, period, work, clients, projects, tax, cadence }),
+    tasks,
+    attention: buildAttention({ today, period, work, clients, projects, tax, cadence, tasks, money }),
     tax,
     cadence,
     totals: {

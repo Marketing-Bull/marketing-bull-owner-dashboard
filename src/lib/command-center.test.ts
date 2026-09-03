@@ -18,9 +18,13 @@ import {
   buildCommandCenter,
   daysBetween,
   monthlyRecurringCost,
+  mrrGapAmount,
+  parseTypedMoney,
   resolvePeriod,
   type ClientRollup,
-  type ProjectRollup
+  type ProjectRollup,
+  type TaskBand,
+  type TaskBrief
 } from "@/lib/command-center";
 import { runMigrations } from "@/lib/migrations";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
@@ -146,6 +150,26 @@ function addExpense(
   );
 }
 
+function addTask(
+  db: DatabaseSync,
+  id: string,
+  patch: { name?: string; dueDate?: number | null; priority?: string | null } = {}
+): void {
+  db.prepare(
+    `INSERT INTO clickup_tasks (id, name, due_date, priority, status, raw_json, synced_at)
+     VALUES (?, ?, ?, ?, 'to do', '{}', ?)`
+  ).run(id, patch.name ?? id, patch.dueDate === null || patch.dueDate === undefined ? null : String(patch.dueDate), patch.priority ?? null, NOW);
+}
+
+/** The classic dashboard's single state row, with only the typed MRR set. */
+function setTypedMrr(db: DatabaseSync, value: string): void {
+  db.prepare(
+    `INSERT INTO dashboard_state (id, goals_json, mrr_current, mrr_projected, mrr_mom_delta, whats_important, hyperfocus_json, widget_order_json)
+     VALUES (1, '[]', ?, '', '', '', '{}', '[]')
+     ON CONFLICT(id) DO UPDATE SET mrr_current = excluded.mrr_current`
+  ).run(value);
+}
+
 /** Expenses reference the chart of accounts, so a code has to exist first. */
 function addAccount(db: DatabaseSync, accountCode: string, scheduleCLine = "Line 18 Office expense"): void {
   db.prepare(
@@ -236,7 +260,91 @@ describe("monthlyRecurringCost", () => {
   });
 });
 
+describe("parseTypedMoney", () => {
+  it("reads whatever the classic dashboard stored, or nothing", () => {
+    expect(parseTypedMoney("42500")).toBe(42500);
+    expect(parseTypedMoney("$42,500")).toBe(42500);
+    expect(parseTypedMoney("42,500/mo")).toBe(42500);
+    expect(parseTypedMoney("")).toBeNull();
+    expect(parseTypedMoney("tbd")).toBeNull();
+    // Zero is not a figure; it is the field not having been filled in.
+    expect(parseTypedMoney("0")).toBeNull();
+    expect(parseTypedMoney(undefined)).toBeNull();
+  });
+});
+
+describe("mrrGapAmount", () => {
+  it("raises the scope doc's case and stays quiet on a rounding gap", () => {
+    expect(mrrGapAmount(3350, 42500, 14)).toBe(39150);
+    expect(mrrGapAmount(42000, 42500, 14)).toBeNull();
+    expect(mrrGapAmount(60, 150, 14)).toBeNull();
+  });
+
+  it("has nothing to say without a typed figure or without client rows", () => {
+    expect(mrrGapAmount(3350, null, 14)).toBeNull();
+    // A fresh database carries the sample default; no rows means no verdict.
+    expect(mrrGapAmount(0, 42500, 0)).toBeNull();
+  });
+});
+
 describe("buildCommandCenter", () => {
+  it("reads open tasks from the cache with the Tasks screen's definition of overdue", () => {
+    const db = freshDb();
+    const now = new Date(2026, 7, 13, 15, 0);
+    const at = (y: number, m: number, d: number, h = 9) => new Date(y, m - 1, d, h).getTime();
+    addTask(db, "a", { name: "Send invoice", dueDate: at(2026, 8, 10), priority: "urgent" });
+    addTask(db, "b", { name: "Morning check", dueDate: at(2026, 8, 13, 9) });
+    addTask(db, "c", { name: "Afternoon call", dueDate: at(2026, 8, 13, 17) });
+    addTask(db, "d", { name: "Next week", dueDate: at(2026, 8, 20) });
+    addTask(db, "e", { name: "Someday", dueDate: null });
+
+    const payload = buildCommandCenter(db, { period: "mtd", now });
+    expect(payload.today).toBe("2026-08-13");
+    expect(payload.tasks.open).toBe(5);
+    // Due before 3pm: the 10th, and this morning's 9am.
+    expect(payload.tasks.overdue).toBe(2);
+    expect(payload.tasks.dueToday).toBe(2);
+    expect(payload.tasks.dueSoon).toBe(2);
+    expect(payload.tasks.next.map((task) => task.id)).toEqual(["a", "b", "c", "d", "e"]);
+    expect(payload.tasks.mostOverdue.map((task) => task.name)).toEqual(["Send invoice", "Morning check"]);
+
+    const item = payload.attention.find((entry) => entry.id === "overdue-tasks");
+    expect(item?.count).toBe(2);
+    expect(item?.detail).toContain("Send invoice (3 days)");
+    expect(item?.detail).toContain("Morning check (earlier today)");
+    expect(item?.href).toBe("/tasks?overdue=true&sort=due&direction=asc");
+  });
+
+  it("surfaces the typed MRR beside the derived one and flags the gap", () => {
+    const db = freshDb();
+    addClient(db, "c1", { name: "Linder Diaz Law", mrr: 1000 });
+    addClient(db, "c2", { name: "Queens Hyperbaric", mrr: 1100 });
+    addClient(db, "c3", { name: "Rock The Treatment", mrr: 1250 });
+    setTypedMrr(db, "42500");
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.committedMrr).toBe(3350);
+    expect(payload.money.typedMrr).toBe(42500);
+    expect(payload.money.mrrGap).toBe(39150);
+
+    const item = payload.attention.find((entry) => entry.id === "mrr-mismatch");
+    expect(item?.severity).toBe("serious");
+    expect(item?.detail).toContain("$3,350");
+    expect(item?.detail).toContain("$42,500");
+    expect(item?.href).toBe("/clients");
+  });
+
+  it("does not flag MRR when the typed figure is blank", () => {
+    const db = freshDb();
+    addClient(db, "c1", { mrr: 1000 });
+    setTypedMrr(db, "");
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.typedMrr).toBeNull();
+    expect(payload.money.mrrGap).toBeNull();
+    expect(payload.attention.find((entry) => entry.id === "mrr-mismatch")).toBeUndefined();
+  });
+
   it("computes money, work, and reimbursables from the ledgers", () => {
     const db = freshDb();
     addClient(db, "c1", { name: "Acme", mrr: 2000 });
@@ -451,6 +559,34 @@ describe("buildAttention", () => {
     streakDays: 4
   };
 
+  const baseTasks: TaskBand = {
+    open: 3,
+    overdue: 0,
+    dueToday: 1,
+    dueSoon: 2,
+    next: [],
+    mostOverdue: [],
+    lastSyncedAt: "2026-08-13T12:00:00.000Z",
+    stale: false,
+    syncError: null
+  };
+
+  const baseMoney = { committedMrr: 1000, typedMrr: 1000, mrrClients: 1, mrrGap: null as number | null };
+
+  function task(patch: Partial<TaskBrief> = {}): TaskBrief {
+    return {
+      id: "t1",
+      name: "Send invoice",
+      url: null,
+      dueDate: new Date(2026, 7, 10, 9).getTime(),
+      priority: "high",
+      clientName: "Acme",
+      projectName: null,
+      listName: "Ops",
+      ...patch
+    };
+  }
+
   function client(patch: Partial<ClientRollup> = {}): ClientRollup {
     return {
       id: "c1",
@@ -491,6 +627,8 @@ describe("buildAttention", () => {
     projects?: ProjectRollup[];
     tax?: typeof baseTax;
     cadence?: typeof baseCadence;
+    tasks?: TaskBand;
+    money?: typeof baseMoney;
   }) {
     return buildAttention({
       today: "2026-08-13",
@@ -499,9 +637,40 @@ describe("buildAttention", () => {
       clients: patch.clients ?? [client()],
       projects: patch.projects ?? [project()],
       tax: patch.tax ?? baseTax,
-      cadence: patch.cadence ?? baseCadence
+      cadence: patch.cadence ?? baseCadence,
+      tasks: patch.tasks ?? baseTasks,
+      money: patch.money ?? baseMoney
     });
   }
+
+  it("names the longest-overdue tasks and says how stale the cache is", () => {
+    const items = run({
+      tasks: {
+        ...baseTasks,
+        overdue: 4,
+        mostOverdue: [task(), task({ id: "t2", name: "Renew domain", dueDate: new Date(2026, 7, 12, 9).getTime() })],
+        stale: true,
+        lastSyncedAt: "2026-08-13T13:05:00.000Z"
+      }
+    });
+    const item = items.find((entry) => entry.id === "overdue-tasks");
+    expect(item?.severity).toBe("serious");
+    expect(item?.title).toBe("4 ClickUp tasks overdue");
+    expect(item?.detail).toContain("Send invoice (3 days)");
+    expect(item?.detail).toContain("Renew domain (1 day)");
+    expect(item?.detail).toContain("Task cache from");
+  });
+
+  it("does not mention the cache age when it is fresh", () => {
+    const items = run({ tasks: { ...baseTasks, overdue: 1, mostOverdue: [task()] } });
+    expect(items.find((entry) => entry.id === "overdue-tasks")?.detail).not.toContain("cache");
+  });
+
+  it("raises the MRR gap the lib computed and stays quiet when there is none", () => {
+    expect(run({ money: { committedMrr: 3350, typedMrr: 42500, mrrClients: 3, mrrGap: 39150 } })
+      .find((entry) => entry.id === "mrr-mismatch")?.amount).toBe(39150);
+    expect(run({ money: { committedMrr: 42000, typedMrr: 42500, mrrClients: 3, mrrGap: null } })).toEqual([]);
+  });
 
   it("stays silent when everything is healthy", () => {
     expect(run({})).toEqual([]);
