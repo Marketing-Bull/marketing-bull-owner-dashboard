@@ -15,7 +15,8 @@ definitions, and 4 trips on 2026-08-13. Next comes Calendar views.
 
 ## What It Is
 
-- Lightweight Next.js app with one main dashboard screen
+- Lightweight Next.js app with two dashboard screens: the original manual
+  scratchpad at `/` and the derived-data `Command Center` at `/command`
 - Built as a standalone replacement for the heavier Mission Control route
 - Designed as a compact daily command center for projects, calendar, priorities, and manual focus state
 - Installable as a PWA
@@ -66,7 +67,8 @@ the source of truth for task status.
 3. `UI/runtime layer`
 - Persistent sidebar menu (mission-control-style layout: Operate / Track /
   System / External sections) around every screen except `/login`; drawer +
-  top bar under 860px. `/time`, `/expenses`, and `/mileage` are live;
+  top bar under 860px. `/command` (see below), `/time`, `/expenses`, and
+  `/mileage` are live;
   `/calendar` remains an honest phase 5 placeholder marked "soon";
   `/settings` manages the ClickUp API key, shows protection state and data
   locations, and links the consolidation scope at `/scope`
@@ -101,6 +103,81 @@ feeds it reads:
 
 The visible copy avoids framework descriptors and names the table or feed that
 owns the data whenever that helps explain the screen.
+
+## Command Center (`/command`)
+
+A second dashboard, added beside the original rather than replacing it. The home
+screen at `/` is unchanged and still owns the manual daily state; the Command
+Center owns nothing and types nothing. Every figure on it is derived from the
+ledgers the app has owned since phases 2-4, so it cannot go stale between
+retypings the way `mrr.current` and the daily win do.
+
+The reading order is the order the questions actually get asked:
+
+| Panel | Answers | Source |
+| --- | --- | --- |
+| Headline band | What did I make? | `expenses` (income vs expense), `clients.mrr`, `time_entries` |
+| Needs attention | What is wrong right now? | the exception rules below |
+| Cash flow | Where is it heading? | 12 months of `expenses`, income and spend side by side |
+| Clients | Who is it coming from? | `clients` + per-client time, income, and last activity |
+| Where the hours went | What did the time buy? | `time_entries` by active project |
+| Latest records | What has been logged lately? | newest rows across time, expenses, and mileage |
+| Today | What is on today? | `time_entries` for today, Google Calendar, the `clickup_tasks` cache the Tasks screen maintains |
+| Deductions | What do I owe the IRS? | `expenses` x `chart_accounts`, `mileage_entries` x rate |
+
+### Periods and comparisons
+
+One control drives the whole screen: `Month to date`, `Last month`,
+`Quarter to date`, or `Year to date` (remembered per browser in
+`localStorage`, not in the database). Every delta is measured against the same
+number of *elapsed* days in the previous window, clamped to that window's own
+end — on the 8th, month-to-date is compared with the 1st-8th of last month, not
+with a full 31-day month that would report a collapse in revenue every month.
+
+### Exception rules
+
+The attention panel is a function of the aggregates, not a feed. It renders
+nothing when nothing is wrong, and each rule links to the exact rows it found:
+
+| Rule | Severity | Fires when |
+| --- | --- | --- |
+| Past paid-through | Costing money | An active client's `paid_through_date` is before today |
+| Billable at $0 | Costing money | Billable time entries in the period resolved to a `0` rate |
+| MRR mismatch | Slipping | Active client MRR rows and the classic dashboard's typed `mrr.current` differ by 10%+ and $100+; the tile shows both |
+| Retainer over-serviced | Slipping | Billable value delivered exceeds 125% of a client's MRR (monthly windows only) |
+| Overdue tasks | Slipping | Cached ClickUp tasks due before now, named longest-overdue first, with the cache age when stale |
+| Focus untouched | Slipping | An urgent **and** important project has no hours this period |
+| Silent clients | Tidy up | An active client has no time, spend, or trips for 30+ days |
+| Uncategorized spend | Tidy up | This year's expenses with no `account_code` |
+| Missing receipts | Tidy up | Expenses over $75 this year with no stored receipt |
+| Logging gap | Tidy up | Two or more days since the last time entry |
+
+Retainer coverage is deliberately monthly-only: comparing a quarter of delivery
+against one month of MRR would flag every healthy account.
+
+The MRR rule exists because the scope doc warned that summing client rows gave
+$3,350 against a typed $42,500 — the client records were never kept current,
+and a derived figure that silently replaced the typed one would have looked
+authoritative while being wrong. Until the rows are fixed, the tile carries
+both numbers and the panel says so.
+
+Tasks are read from the local `clickup_tasks` cache, never from ClickUp, so a
+slow upstream cannot delay the money figures. The screen pokes `/api/tasks`
+on load — which refreshes the cache when it is stale — and re-reads the
+command payload if that reported a refresh.
+
+### `GET /api/command`
+
+One request, one screen: `?period=mtd|last-month|qtd|ytd`, defaulting to `mtd`
+and correcting an unknown value rather than rejecting it, so an old bookmark
+still renders. It reads six tables in one pass; ClickUp and Calendar stay on
+their own endpoints so an outage in either degrades inside its own panel instead
+of taking the money figures with it. Gated by `src/proxy.ts` like every other
+`/api/*` route.
+
+The aggregation and the exception rules live in `src/lib/command-center.ts` —
+pure enough to test, which `src/lib/command-center.test.ts` does against real
+SQLite.
 
 ## Access Control
 
@@ -333,6 +410,80 @@ three earlier schema generations. It is the only migration allowed that shape �
 everything after it runs against a known state and must be a plain, run-once
 migration.
 
+### Off-site mirror (Supabase)
+
+The daily snapshots below are real backups of a real database that sit on the
+same disk as the database they protect. One dead disk takes all fifteen copies.
+`npm run backup:supabase` closes that by pushing the whole store to an
+`owner_dashboard` schema in Supabase.
+
+SQLite stays the system of record. The mirror is a copy — queryable from
+anywhere, and the shape the phase-D2 Supabase sync was always meant to take.
+
+**Where it lives.** The `amb-auto-scheduler` project
+(`dfuhhgguzudkbwsabrjt`, us-east-1), in its own `owner_dashboard` schema
+rather than a project of its own: the Supabase org is on the free plan, which
+caps it at two projects, and both were spoken for. The schema boundary is what
+keeps the arrangement honest — nothing here touches the scheduler's `public`
+tables, and its anon key cannot read a row of this schema.
+
+**One-time setup**
+
+1. ~~Apply [`supabase/owner-dashboard-mirror.sql`](supabase/owner-dashboard-mirror.sql)~~
+   — done on 2026-08-14; all 14 tables exist with RLS enabled. The file is
+   idempotent, so re-running it against a replacement project is safe.
+2. Add `owner_dashboard` to Project Settings → API → **Exposed schemas**, or
+   PostgREST answers `PGRST106` and the script says so in as many words.
+3. Put the credentials somewhere root-owned — the systemd unit, or a file that
+   is not this repo. The service-role key is full access to the project:
+
+   ```bash
+   SUPABASE_URL=https://dfuhhgguzudkbwsabrjt.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=<service role key>
+   ```
+
+**Running it**
+
+```bash
+npm run backup:supabase -- --dry-run   # counts every table, writes nothing
+npm run backup:supabase                # pushes
+```
+
+Nightly, after the dashboard has settled:
+
+```cron
+30 2 * * * cd /path/to/marketing-bull-owner-dashboard && /usr/bin/npm run backup:supabase >> /var/log/owner-dashboard-backup.log 2>&1
+```
+
+**What it does and does not carry**
+
+- Every entity, ledger, accounting reference, and the hand-typed daily state —
+  including `daily_history`, which exists nowhere else.
+- Deletions propagate. Each run stamps every row with one `synced_at`; rows in
+  the mirror older than that stamp are gone from the source and are removed —
+  but only after that table's writes have all succeeded, so an interrupted run
+  can never empty a table.
+- **Secrets never leave the machine.** `app_settings` is filtered by an
+  allowlist (`mileage.rate`) rather than a denylist, so the ClickUp and maps API
+  keys are excluded, and so is any credential a later feature adds.
+- **Caches are skipped** — `clickup_tasks`, `clickup_sync_state`, and
+  `mileage_route_cache` rebuild themselves from upstream.
+- **Receipt files are not included.** Only `receipt_name` / `receipt_path` are
+  mirrored, so a restore from Supabase alone has the records without the
+  attachments. Copy `receipts/` separately.
+- Every run lands a row in `owner_dashboard.sync_runs` with per-table counts and
+  the source hostname, because a backup nobody can verify is not a backup:
+
+  ```sql
+  select started_at, status, row_counts from owner_dashboard.sync_runs
+  order by started_at desc limit 5;
+  ```
+
+Every mirrored table has RLS enabled with no policies. The service-role key
+bypasses RLS; every other role, including the anon key any client would carry,
+reads nothing. That schema holds contact details, rates, MRR, and client
+addresses — adding a policy is how it stops being private.
+
 ### Location and backups
 
 The database lives at `data/dashboard.sqlite` under the working directory, or
@@ -473,6 +624,13 @@ bugs that actually shipped rather than at coverage for its own sake:
   must not run.
 - `backup.test.ts` — the daily snapshot round-trips through real SQLite and the
   prune never deletes a file it does not recognise.
+- `command-center.test.ts` — the Command Center's arithmetic against real
+  SQLite, weighted toward the numbers that would be wrong *plausibly*: a
+  comparison window that flatters the current one, a retainer ratio computed
+  over a quarter, a rate re-derived instead of read from the row, weekly
+  recurring costs treated as four weeks a month. The exception rules are tested
+  in both directions, including the case that matters most — a healthy database
+  must produce an empty list.
 
 The database suites point `OWNER_DASHBOARD_DB_PATH` at a temp directory before
 importing `dashboard-state.ts`, so `npm test` never touches the real
@@ -503,6 +661,11 @@ ClickUp source ids when it stops being one.
 
 ## Key Files
 
+- `src/components/command-center.tsx`
+- `src/components/command-center.module.css`
+- `src/lib/command-center.ts`
+- `src/app/(app)/command/page.tsx`
+- `src/app/api/command/route.ts`
 - `src/components/owner-dashboard.tsx`
 - `src/components/owner-dashboard.module.css`
 - `src/app/api/dashboard/route.ts`
@@ -575,7 +738,13 @@ Known and deliberate, roughly in the order they are worth fixing:
   tailnet. Marked `FIXME`; see [Outbound links in the header](#outbound-links-in-the-header).
 - History is recorded but barely used — only the streak reads it. The rows carry
   MRR, goals, and call counts, so trend and look-back reporting is now possible
-  without further schema work.
+  without further schema work. The Command Center deliberately does not read it:
+  everything there is derived from the ledgers, and `daily_history` holds
+  hand-typed figures.
+- The Command Center reports billable work delivered, not invoices. There is no
+  invoice model yet, so "delivered" is hours x the frozen rate — what the work
+  is worth, not what has been billed or collected. `paid_through_date` and
+  `invoice_status` on the client row are the only billing state that exists.
 - Service worker caching is intentionally light.
 - Install UX is still basic; no explicit install button yet.
 - Tests cover the lib and database layers; the React components are untested.
