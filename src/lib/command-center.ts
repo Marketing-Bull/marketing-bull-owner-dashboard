@@ -19,6 +19,7 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
+import { dayKey } from "@/lib/calendar-days";
 import { getClickUpTaskSyncInfo } from "@/lib/clickup-task-cache";
 import { queryClickUpTasks } from "@/lib/clickup-tasks";
 import { todayKey } from "@/lib/history";
@@ -823,13 +824,20 @@ function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
   });
 }
 
+/** "[P1] Renew the domain" — the classic widget's convention for a typed priority. */
+const PRIORITY_TAG = /^\[(P[0-3])\]\s*/i;
+const TAG_PRIORITY: Record<string, string> = { P0: "urgent", P1: "high", P2: "normal", P3: "low" };
+
 function toTaskBrief(task: ClickUpTaskRecord): TaskBrief {
+  // A tag typed into the name wins over ClickUp's own field, as it always did
+  // on the classic widget: it is the one somebody set on purpose.
+  const tag = PRIORITY_TAG.exec(task.name);
   return {
     id: task.id,
-    name: task.name,
+    name: tag ? task.name.slice(tag[0].length) : task.name,
     url: task.url,
     dueDate: task.dueDate,
-    priority: task.priority,
+    priority: tag ? TAG_PRIORITY[tag[1].toUpperCase()] : task.priority,
     clientName: task.clientName,
     projectName: task.projectName,
     listName: task.listName
@@ -844,38 +852,32 @@ function toTaskBrief(task: ClickUpTaskRecord): TaskBrief {
  * figures; the price is freshness, so the band carries the sync time and the
  * screen pokes `/api/tasks` on load so a stale cache refreshes in the
  * background. The queries are the Tasks ledger's own, so "overdue" means the
- * same thing on both screens.
+ * same thing on both screens — with one narrowing the classic widget also
+ * made: Contact records are people, not work, and are left out.
+ *
+ * `mostOverdue` is not a query. The page is ordered due-ascending with
+ * undated rows last, and every overdue row is due before every row that is
+ * not, so the overdue tasks are exactly the first `overdue` entries of `next`.
  */
-function taskBand(db: DatabaseSync, now: Date): TaskBand {
-  const base = { page: 1, sort: "due" as const, direction: "asc" as const };
-  const today = todayKey(now);
+function taskBand(db: DatabaseSync, now: Date, today: string): TaskBand {
+  const base = { page: 1, sort: "due" as const, direction: "asc" as const, excludeTaskTypes: ["contact"] };
   const upcoming = queryClickUpTasks(db, { ...base, pageSize: 6 }, now);
-  const overdue = queryClickUpTasks(db, { ...base, pageSize: 3, overdue: true }, now);
   const dueToday = queryClickUpTasks(db, { ...base, pageSize: 1, dueFrom: today, dueTo: today }, now);
   const sync = getClickUpTaskSyncInfo(db, now);
+  const next = upcoming.items.map(toTaskBrief);
+  const overdue = upcoming.filteredTotals.overdue;
 
   return {
     open: upcoming.filteredTotals.tasks,
-    overdue: upcoming.filteredTotals.overdue,
+    overdue,
     dueToday: dueToday.filteredTotals.tasks,
     dueSoon: upcoming.filteredTotals.dueSoon,
-    next: upcoming.items.map(toTaskBrief),
-    mostOverdue: overdue.items.map(toTaskBrief),
+    next,
+    mostOverdue: next.slice(0, Math.min(3, overdue)),
     lastSyncedAt: sync.lastSyncedAt,
     stale: sync.stale,
     syncError: sync.error ?? null
   };
-}
-
-function dayKeyOfMs(ms: number): string {
-  const date = new Date(ms);
-  return formatDayKey(date.getFullYear(), date.getMonth() + 1, date.getDate());
-}
-
-function formatSyncTime(iso: string): string {
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return iso;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(ms);
 }
 
 function taxSnapshot(db: DatabaseSync, today: string): TaxSnapshot {
@@ -1116,10 +1118,12 @@ export function buildAttention(input: {
 
   if (tasks.overdue > 0) {
     const named = tasks.mostOverdue.map((task) => {
-      const days = task.dueDate === null ? 0 : daysBetween(dayKeyOfMs(task.dueDate), today) - 1;
+      const days = task.dueDate === null ? 0 : daysBetween(dayKey(new Date(task.dueDate)), today) - 1;
       return `${task.name} (${days <= 0 ? "earlier today" : `${days} ${plural(days, "day")}`})`;
     });
-    const freshness = tasks.stale && tasks.lastSyncedAt ? ` Task cache from ${formatSyncTime(tasks.lastSyncedAt)}.` : "";
+    // No clock string here: the payload is rendered in the reader's timezone,
+    // and the Today panel formats the sync time there. This only says whether.
+    const freshness = tasks.stale ? " The task cache is stale." : "";
     items.push({
       id: "overdue-tasks",
       severity: "serious",
@@ -1213,7 +1217,7 @@ export function buildCommandCenter(
   const projects = projectRollups(db, period);
   const tax = taxSnapshot(db, today);
   const cadence = cadenceSnapshot(db, today);
-  const tasks = taskBand(db, now);
+  const tasks = taskBand(db, now, today);
 
   const counts = db
     .prepare(
@@ -1228,7 +1232,9 @@ export function buildCommandCenter(
     .get() as Row;
 
   return {
-    generatedAt: new Date().toISOString(),
+    // The same instant the task counts were measured against, so the browser
+    // draws the overdue line exactly where the server did.
+    generatedAt: now.toISOString(),
     today,
     period,
     money,

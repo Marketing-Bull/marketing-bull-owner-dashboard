@@ -153,12 +153,19 @@ function addExpense(
 function addTask(
   db: DatabaseSync,
   id: string,
-  patch: { name?: string; dueDate?: number | null; priority?: string | null } = {}
+  patch: { name?: string; dueDate?: number | null; priority?: string | null; taskType?: string | null } = {}
 ): void {
   db.prepare(
-    `INSERT INTO clickup_tasks (id, name, due_date, priority, status, raw_json, synced_at)
-     VALUES (?, ?, ?, ?, 'to do', '{}', ?)`
-  ).run(id, patch.name ?? id, patch.dueDate === null || patch.dueDate === undefined ? null : String(patch.dueDate), patch.priority ?? null, NOW);
+    `INSERT INTO clickup_tasks (id, name, due_date, priority, status, task_type, raw_json, synced_at)
+     VALUES (?, ?, ?, ?, 'to do', ?, '{}', ?)`
+  ).run(
+    id,
+    patch.name ?? id,
+    patch.dueDate === null || patch.dueDate === undefined ? null : String(patch.dueDate),
+    patch.priority ?? null,
+    patch.taskType ?? null,
+    NOW
+  );
 }
 
 /** The classic dashboard's single state row, with only the typed MRR set. */
@@ -293,10 +300,12 @@ describe("buildCommandCenter", () => {
     const now = new Date(2026, 7, 13, 15, 0);
     const at = (y: number, m: number, d: number, h = 9) => new Date(y, m - 1, d, h).getTime();
     addTask(db, "a", { name: "Send invoice", dueDate: at(2026, 8, 10), priority: "urgent" });
-    addTask(db, "b", { name: "Morning check", dueDate: at(2026, 8, 13, 9) });
+    addTask(db, "b", { name: "[P1] Morning check", dueDate: at(2026, 8, 13, 9) });
     addTask(db, "c", { name: "Afternoon call", dueDate: at(2026, 8, 13, 17) });
     addTask(db, "d", { name: "Next week", dueDate: at(2026, 8, 20) });
     addTask(db, "e", { name: "Someday", dueDate: null });
+    // A Contact record with a follow-up date is a person, not work.
+    addTask(db, "z", { name: "Follow up with a lead", dueDate: at(2026, 8, 9), taskType: "contact" });
 
     const payload = buildCommandCenter(db, { period: "mtd", now });
     expect(payload.today).toBe("2026-08-13");
@@ -307,6 +316,11 @@ describe("buildCommandCenter", () => {
     expect(payload.tasks.dueSoon).toBe(2);
     expect(payload.tasks.next.map((task) => task.id)).toEqual(["a", "b", "c", "d", "e"]);
     expect(payload.tasks.mostOverdue.map((task) => task.name)).toEqual(["Send invoice", "Morning check"]);
+    // The "[P1]" prefix is the priority, typed on purpose; it is not part of the name.
+    expect(payload.tasks.next[1]).toMatchObject({ name: "Morning check", priority: "high" });
+    expect(payload.tasks.next.map((task) => task.id)).not.toContain("z");
+    // The instant the counts were measured against is the one the browser gets.
+    expect(payload.generatedAt).toBe(now.toISOString());
 
     const item = payload.attention.find((entry) => entry.id === "overdue-tasks");
     expect(item?.count).toBe(2);
@@ -658,7 +672,7 @@ describe("buildAttention", () => {
     expect(item?.title).toBe("4 ClickUp tasks overdue");
     expect(item?.detail).toContain("Send invoice (3 days)");
     expect(item?.detail).toContain("Renew domain (1 day)");
-    expect(item?.detail).toContain("Task cache from");
+    expect(item?.detail).toContain("cache is stale");
   });
 
   it("does not mention the cache age when it is fresh", () => {
