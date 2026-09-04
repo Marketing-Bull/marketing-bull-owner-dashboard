@@ -796,6 +796,13 @@ export function CommandCenter() {
   const [error, setError] = useState<string | null>(null);
   /** First read fills the screen; later ones refresh it under the old figures. */
   const loadedOnce = useRef(false);
+  /**
+   * Monotonic request id. A response that is not from the newest request is
+   * dropped: the refresh-triggered reload has no abort signal, and without this
+   * a slow one could land after a period change and overwrite the newer
+   * period's figures under the wrong label.
+   */
+  const loadSequence = useRef(0);
 
   // The chosen period is a preference, not shared state: it belongs to this
   // browser, so it stays out of the database the old dashboard writes to.
@@ -808,6 +815,7 @@ export function CommandCenter() {
   }, []);
 
   const load = useCallback(async (nextPeriod: CommandPeriodKey, signal?: AbortSignal) => {
+    const sequence = ++loadSequence.current;
     if (loadedOnce.current) setRefreshing(true);
     else setLoading(true);
 
@@ -815,6 +823,7 @@ export function CommandCenter() {
       const response = await fetch(`/api/command?period=${nextPeriod}`, { cache: "no-store", signal });
       if (redirectedToLogin(response)) return;
       const json = await response.json().catch(() => null);
+      if (sequence !== loadSequence.current) return;
       if (!response.ok) {
         throw new Error(json?.error || `The command feed answered ${response.status}.`);
       }
@@ -822,11 +831,14 @@ export function CommandCenter() {
       setError(null);
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
+      if (sequence !== loadSequence.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       loadedOnce.current = true;
-      setLoading(false);
-      setRefreshing(false);
+      if (sequence === loadSequence.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -857,8 +869,16 @@ export function CommandCenter() {
     let refreshed = false;
 
     if (tasks.status === "fulfilled" && tasks.value.ok) {
-      const payload = (await tasks.value.json().catch(() => ({}))) as { sync?: { refreshed?: boolean } };
+      const payload = (await tasks.value.json().catch(() => ({}))) as {
+        sync?: { refreshed?: boolean };
+        syncError?: string | null;
+      };
       refreshed = Boolean(payload.sync?.refreshed);
+      // The command payload may have read the sync row before this attempt
+      // ran, so a refresh that has just failed is only visible from here.
+      if (payload.syncError) {
+        next.taskError = `ClickUp refresh failed: ${payload.syncError.replace(/[.\s]+$/, "")}.`;
+      }
     } else {
       next.taskError = "The task list could not be refreshed; showing the last cached copy.";
     }
@@ -1179,12 +1199,13 @@ export function CommandCenter() {
                 <Link href={`/tasks?dueFrom=${data.today}&dueTo=${data.today}`} className={styles.taskCount}>
                   {tasks.dueToday} due today
                 </Link>
-                <span className={styles.taskCount}>{tasks.dueSoon} this week</span>
+                <span className={styles.taskCount}>{tasks.dueSoon} next 7 days</span>
               </div>
-              {feed.taskError || tasks.syncError ? (
+              {feed.taskError || tasks.syncError || tasks.stale ? (
                 <p className={styles.feedNotice}>
-                  {feed.taskError ?? `ClickUp sync failed: ${tasks.syncError}.`}
-                  {tasks.lastSyncedAt ? ` Cache from ${formatSync(tasks.lastSyncedAt)}.` : ""}
+                  {feed.taskError ??
+                    (tasks.syncError ? `ClickUp sync failed: ${tasks.syncError}.` : "The task cache is stale.")}
+                  {tasks.lastSyncedAt ? ` Last synced ${formatSync(tasks.lastSyncedAt)}.` : " Never synced."}
                 </p>
               ) : null}
               {tasks.next.length === 0 ? (

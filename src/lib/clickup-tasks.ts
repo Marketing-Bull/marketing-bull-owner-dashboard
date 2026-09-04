@@ -84,6 +84,8 @@ export type ClickUpTaskQuery = {
   projectIds?: string[];
   assignment?: (typeof CLICKUP_ASSIGNMENTS)[number];
   taskType?: string;
+  /** Internal callers only — not parsed from the URL. Case-insensitive. */
+  excludeTaskTypes?: string[];
   dueFrom?: string;
   dueTo?: string;
   hasDueDate?: boolean;
@@ -228,6 +230,10 @@ function taskWhere(query: ClickUpTaskQuery, nowMs: number): { where: string; par
   addOptionalInFilter(clauses, params, "t.client_id", query.clientIds);
   addOptionalInFilter(clauses, params, "t.project_id", query.projectIds);
   addLikeFilter(clauses, params, "t.task_type", query.taskType);
+  if (query.excludeTaskTypes?.length) {
+    clauses.push(`LOWER(COALESCE(t.task_type, '')) NOT IN (${query.excludeTaskTypes.map(() => "?").join(", ")})`);
+    params.push(...query.excludeTaskTypes.map((value) => value.toLowerCase()));
+  }
 
   if (query.assignment === "assigned") clauses.push("(t.client_id IS NOT NULL OR t.project_id IS NOT NULL)");
   if (query.assignment === "unassigned") clauses.push("(t.client_id IS NULL AND t.project_id IS NULL)");

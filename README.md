@@ -145,7 +145,7 @@ nothing when nothing is wrong, and each rule links to the exact rows it found:
 | Billable at $0 | Costing money | Billable time entries in the period resolved to a `0` rate |
 | MRR mismatch | Slipping | Active client MRR rows and the classic dashboard's typed `mrr.current` differ by 10%+ and $100+; the tile shows both |
 | Retainer over-serviced | Slipping | Billable value delivered exceeds 125% of a client's MRR (monthly windows only) |
-| Overdue tasks | Slipping | Cached ClickUp tasks due before now, named longest-overdue first, with the cache age when stale |
+| Overdue tasks | Slipping | Cached ClickUp tasks due before now (Contact records excluded), named longest-overdue first; says when the cache is stale, and the Today panel shows the sync time in the reader's timezone |
 | Focus untouched | Slipping | An urgent **and** important project has no hours this period |
 | Silent clients | Tidy up | An active client has no time, spend, or trips for 30+ days |
 | Uncategorized spend | Tidy up | This year's expenses with no `account_code` |
