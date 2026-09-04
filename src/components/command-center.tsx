@@ -48,7 +48,6 @@ import {
 } from "lucide-react";
 import styles from "./command-center.module.css";
 import { dayKey } from "@/lib/calendar-days";
-import { normalizeDashboardData } from "@/lib/dashboard-data";
 import type {
   ActivityItem,
   AttentionItem,
@@ -58,7 +57,7 @@ import type {
   CommandPeriodKey,
   TrendPoint
 } from "@/lib/command-center";
-import type { CalendarEvent, ClickUpSyncInfo, UpNextTask } from "@/lib/types";
+import type { CalendarEvent } from "@/lib/types";
 
 /**
  * Period options live here rather than being imported from the lib module: the
@@ -143,6 +142,59 @@ function formatLongDay(day: string): string {
 
 function formatClock(timestamp: number): string {
   return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(timestamp);
+}
+
+function formatSync(iso: string): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(ms);
+}
+
+/** ClickUp's priority vocabulary onto the chip styles the old feed used. */
+function priorityClass(priority: string | null): string {
+  switch ((priority ?? "").toLowerCase()) {
+    case "urgent":
+      return "p0";
+    case "high":
+      return "p1";
+    case "normal":
+      return "p2";
+    default:
+      return "p3";
+  }
+}
+
+function priorityLabel(priority: string | null): string {
+  const value = (priority ?? "").toLowerCase();
+  if (value === "urgent") return "P0";
+  if (value === "high") return "P1";
+  if (value === "normal") return "P2";
+  if (value === "low") return "P3";
+  return "—";
+}
+
+/**
+ * A due date relative to the moment the payload was computed.
+ *
+ * `nowMs` is the payload's own timestamp rather than `Date.now()`, so the list
+ * and the server's overdue count draw the line in the same place — a task due
+ * at 9am is overdue at 3pm on both, not "today" on one and overdue on the other.
+ */
+function describeDue(
+  dueMs: number | null,
+  today: string,
+  nowMs: number
+): { label: string; tone: "overdue" | "today" | "later" | "none" } {
+  if (dueMs === null) return { label: "No due date", tone: "none" };
+  const dueDay = dayKey(new Date(dueMs));
+  if (dueDay < today) return { label: `Overdue · ${formatDay(dueDay)}`, tone: "overdue" };
+  if (dueDay === today) {
+    return dueMs < nowMs
+      ? { label: `Overdue · ${formatClock(dueMs)}`, tone: "overdue" }
+      : { label: `Today ${formatClock(dueMs)}`, tone: "today" };
+  }
+  if (dueDay === shiftBack(today, -1)) return { label: "Tomorrow", tone: "later" };
+  return { label: formatDay(dueDay), tone: "later" };
 }
 
 /** The proxy answers unauthenticated API calls with JSON, so redirect here. */
@@ -727,14 +779,13 @@ function ActivityPanel({ items }: { items: ActivityItem[] }) {
 /* ------------------------------------------------------------------------- */
 
 type Feed = {
-  tasks: UpNextTask[];
   events: CalendarEvent[];
-  sync?: ClickUpSyncInfo;
-  taskError: string | null;
   calendarError: string | null;
+  /** Set when the Tasks endpoint itself could not be reached — not when ClickUp failed. */
+  taskError: string | null;
 };
 
-const EMPTY_FEED: Feed = { tasks: [], events: [], taskError: null, calendarError: null };
+const EMPTY_FEED: Feed = { events: [], calendarError: null, taskError: null };
 
 export function CommandCenter() {
   const [period, setPeriod] = useState<CommandPeriodKey>("mtd");
@@ -745,6 +796,13 @@ export function CommandCenter() {
   const [error, setError] = useState<string | null>(null);
   /** First read fills the screen; later ones refresh it under the old figures. */
   const loadedOnce = useRef(false);
+  /**
+   * Monotonic request id. A response that is not from the newest request is
+   * dropped: the refresh-triggered reload has no abort signal, and without this
+   * a slow one could land after a period change and overwrite the newer
+   * period's figures under the wrong label.
+   */
+  const loadSequence = useRef(0);
 
   // The chosen period is a preference, not shared state: it belongs to this
   // browser, so it stays out of the database the old dashboard writes to.
@@ -757,6 +815,7 @@ export function CommandCenter() {
   }, []);
 
   const load = useCallback(async (nextPeriod: CommandPeriodKey, signal?: AbortSignal) => {
+    const sequence = ++loadSequence.current;
     if (loadedOnce.current) setRefreshing(true);
     else setLoading(true);
 
@@ -764,6 +823,7 @@ export function CommandCenter() {
       const response = await fetch(`/api/command?period=${nextPeriod}`, { cache: "no-store", signal });
       if (redirectedToLogin(response)) return;
       const json = await response.json().catch(() => null);
+      if (sequence !== loadSequence.current) return;
       if (!response.ok) {
         throw new Error(json?.error || `The command feed answered ${response.status}.`);
       }
@@ -771,11 +831,14 @@ export function CommandCenter() {
       setError(null);
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
+      if (sequence !== loadSequence.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       loadedOnce.current = true;
-      setLoading(false);
-      setRefreshing(false);
+      if (sequence === loadSequence.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
@@ -788,20 +851,36 @@ export function CommandCenter() {
     };
   }, [period, load]);
 
-  const loadFeeds = useCallback(async () => {
+  /**
+   * The two feeds that can be down, fetched apart from the money figures.
+   *
+   * The Tasks call reads one row and ignores it: its job is the side effect.
+   * `/api/tasks` refreshes the ClickUp cache when it is stale, and the command
+   * payload is computed from that cache — so when it reports a refresh, the
+   * command feed is read again and the task counts and overdue rule catch up.
+   */
+  const loadFeeds = useCallback(async (): Promise<{ refreshed: boolean }> => {
     const [tasks, calendar] = await Promise.allSettled([
-      fetch("/api/dashboard", { cache: "no-store" }),
+      fetch("/api/tasks?pageSize=1&sort=due&direction=asc", { cache: "no-store" }),
       fetch("/api/calendar", { cache: "no-store" })
     ]);
 
     const next: Feed = { ...EMPTY_FEED };
+    let refreshed = false;
 
     if (tasks.status === "fulfilled" && tasks.value.ok) {
-      const normalized = normalizeDashboardData(await tasks.value.json());
-      next.tasks = normalized.upNext.filter((task) => !task.done).slice(0, 5);
-      next.sync = normalized.clickUpSync;
+      const payload = (await tasks.value.json().catch(() => ({}))) as {
+        sync?: { refreshed?: boolean };
+        syncError?: string | null;
+      };
+      refreshed = Boolean(payload.sync?.refreshed);
+      // The command payload may have read the sync row before this attempt
+      // ran, so a refresh that has just failed is only visible from here.
+      if (payload.syncError) {
+        next.taskError = `ClickUp refresh failed: ${payload.syncError.replace(/[.\s]+$/, "")}.`;
+      }
     } else {
-      next.taskError = "ClickUp is not answering right now.";
+      next.taskError = "The task list could not be refreshed; showing the last cached copy.";
     }
 
     if (calendar.status === "fulfilled" && calendar.value.ok) {
@@ -812,12 +891,23 @@ export function CommandCenter() {
     }
 
     setFeed(next);
+    return { refreshed };
   }, []);
 
+  /** The current period, readable from async callbacks without re-creating them. */
+  const periodRef = useRef(period);
   useEffect(() => {
-    const timer = window.setTimeout(() => void loadFeeds(), 0);
+    periodRef.current = period;
+  }, [period]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadFeeds().then(({ refreshed }) => {
+        if (refreshed) void load(periodRef.current);
+      });
+    }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadFeeds]);
+  }, [loadFeeds, load]);
 
   const choosePeriod = (next: CommandPeriodKey) => {
     setPeriod(next);
@@ -861,7 +951,8 @@ export function CommandCenter() {
     );
   }
 
-  const { money: cash, work, reimbursable, cadence, tax, period: window_, totals } = data;
+  const { money: cash, work, reimbursable, cadence, tax, tasks, period: window_, totals } = data;
+  const generatedAtMs = Date.parse(data.generatedAt);
   const monthlyWindow = window_.key === "mtd" || window_.key === "last-month";
   const topProjects = data.projects.filter((project) => project.hours > 0).slice(0, 6);
   const maxProjectHours = Math.max(1, ...topProjects.map((project) => project.hours));
@@ -900,7 +991,9 @@ export function CommandCenter() {
               className={styles.iconButton}
               onClick={() => {
                 void load(period);
-                void loadFeeds();
+                void loadFeeds().then(({ refreshed }) => {
+                  if (refreshed) void load(period);
+                });
               }}
               aria-label="Refresh"
               title="Refresh"
@@ -952,11 +1045,21 @@ export function CommandCenter() {
             <StatTile
               label="Committed MRR"
               value={money(cash.committedMrr)}
-              meta={`${cash.mrrClients} retainer ${cash.mrrClients === 1 ? "client" : "clients"} · ${
-                cash.fixedCoverage === null
-                  ? "no recurring costs recorded"
-                  : `covers ${money(cash.fixedMonthlyCost)}/mo fixed ${formatMultiple(cash.fixedCoverage)}`
-              }`}
+              meta={
+                <>
+                  {`${cash.mrrClients} retainer ${cash.mrrClients === 1 ? "client" : "clients"} · ${
+                    cash.fixedCoverage === null
+                      ? "no recurring costs recorded"
+                      : `covers ${money(cash.fixedMonthlyCost)}/mo fixed ${formatMultiple(cash.fixedCoverage)}`
+                  }`}
+                  {cash.mrrGap !== null && cash.typedMrr !== null ? (
+                    <span className={styles.mismatch}>
+                      <AlertTriangle size={11} aria-hidden="true" />
+                      typed figure says {money(cash.typedMrr)}
+                    </span>
+                  ) : null}
+                </>
+              }
             />
             <StatTile
               label="Work delivered"
@@ -1080,32 +1183,68 @@ export function CommandCenter() {
               )}
 
               <h3 className={styles.subHeading}>
-                <Clock3 size={13} aria-hidden="true" /> Next tasks
+                <Clock3 size={13} aria-hidden="true" /> Tasks
+                <Link href="/tasks" className={styles.subHeadingLink}>
+                  {tasks.open} open
+                  <ArrowRight size={11} aria-hidden="true" />
+                </Link>
               </h3>
-              {feed.taskError ? (
-                <p className={styles.feedError}>{feed.taskError}</p>
-              ) : feed.tasks.length === 0 ? (
-                <p className={styles.emptyState}>No open assigned tasks.</p>
+              <div className={styles.taskCounts}>
+                <Link
+                  href="/tasks?overdue=true&sort=due&direction=asc"
+                  className={`${styles.taskCount} ${tasks.overdue > 0 ? styles.taskCountBad : ""}`}
+                >
+                  {tasks.overdue} overdue
+                </Link>
+                <Link href={`/tasks?dueFrom=${data.today}&dueTo=${data.today}`} className={styles.taskCount}>
+                  {tasks.dueToday} due today
+                </Link>
+                <span className={styles.taskCount}>{tasks.dueSoon} next 7 days</span>
+              </div>
+              {feed.taskError || tasks.syncError || tasks.stale ? (
+                <p className={styles.feedNotice}>
+                  {feed.taskError ??
+                    (tasks.syncError ? `ClickUp sync failed: ${tasks.syncError}.` : "The task cache is stale.")}
+                  {tasks.lastSyncedAt ? ` Last synced ${formatSync(tasks.lastSyncedAt)}.` : " Never synced."}
+                </p>
+              ) : null}
+              {tasks.next.length === 0 ? (
+                <p className={styles.emptyState}>No open assigned tasks in the cache.</p>
               ) : (
                 <ul className={styles.feedList}>
-                  {feed.tasks.map((task) => (
-                    <li key={task.id}>
-                      <span className={`${styles.priority} ${styles[task.priority.toLowerCase()]}`}>
-                        {task.priority}
-                      </span>
-                      <span className={styles.feedTitle}>
-                        {task.href ? (
-                          <a href={task.href} target="_blank" rel="noreferrer">
-                            {task.title}
+                  {tasks.next.map((task) => {
+                    const due = describeDue(task.dueDate, data.today, generatedAtMs);
+                    return (
+                      <li key={task.id}>
+                        <span className={`${styles.priority} ${styles[priorityClass(task.priority)]}`}>
+                          {priorityLabel(task.priority)}
+                        </span>
+                        <span className={styles.feedTitle}>
+                          <Link href={`/tasks?id=${encodeURIComponent(task.id)}`}>{task.name}</Link>
+                        </span>
+                        {/* Outside the ellipsized span, so a long title never clips the link away. */}
+                        {task.url ? (
+                          <a
+                            href={task.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={styles.externalMini}
+                            aria-label="Open in ClickUp"
+                            title="Open in ClickUp"
+                          >
                             <ExternalLink size={11} aria-hidden="true" />
                           </a>
-                        ) : (
-                          task.title
-                        )}
-                      </span>
-                      <span className={styles.feedTime}>{task.due}</span>
-                    </li>
-                  ))}
+                        ) : null}
+                        <span
+                          className={`${styles.feedTime} ${
+                            due.tone === "overdue" ? styles.dueOverdue : due.tone === "today" ? styles.dueToday : ""
+                          }`}
+                        >
+                          {due.label}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
 

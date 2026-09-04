@@ -122,7 +122,7 @@ The reading order is the order the questions actually get asked:
 | Clients | Who is it coming from? | `clients` + per-client time, income, and last activity |
 | Where the hours went | What did the time buy? | `time_entries` by active project |
 | Latest records | What has been logged lately? | newest rows across time, expenses, and mileage |
-| Today | What is on today? | `time_entries` for today, Google Calendar, ClickUp |
+| Today | What is on today? | `time_entries` for today, Google Calendar, the `clickup_tasks` cache the Tasks screen maintains |
 | Deductions | What do I owe the IRS? | `expenses` x `chart_accounts`, `mileage_entries` x rate |
 
 ### Periods and comparisons
@@ -143,7 +143,9 @@ nothing when nothing is wrong, and each rule links to the exact rows it found:
 | --- | --- | --- |
 | Past paid-through | Costing money | An active client's `paid_through_date` is before today |
 | Billable at $0 | Costing money | Billable time entries in the period resolved to a `0` rate |
+| MRR mismatch | Slipping | Active client MRR rows and the classic dashboard's typed `mrr.current` differ by 10%+ and $100+; the tile shows both |
 | Retainer over-serviced | Slipping | Billable value delivered exceeds 125% of a client's MRR (monthly windows only) |
+| Overdue tasks | Slipping | Cached ClickUp tasks due before now (Contact records excluded), named longest-overdue first; says when the cache is stale, and the Today panel shows the sync time in the reader's timezone |
 | Focus untouched | Slipping | An urgent **and** important project has no hours this period |
 | Silent clients | Tidy up | An active client has no time, spend, or trips for 30+ days |
 | Uncategorized spend | Tidy up | This year's expenses with no `account_code` |
@@ -152,6 +154,17 @@ nothing when nothing is wrong, and each rule links to the exact rows it found:
 
 Retainer coverage is deliberately monthly-only: comparing a quarter of delivery
 against one month of MRR would flag every healthy account.
+
+The MRR rule exists because the scope doc warned that summing client rows gave
+$3,350 against a typed $42,500 — the client records were never kept current,
+and a derived figure that silently replaced the typed one would have looked
+authoritative while being wrong. Until the rows are fixed, the tile carries
+both numbers and the panel says so.
+
+Tasks are read from the local `clickup_tasks` cache, never from ClickUp, so a
+slow upstream cannot delay the money figures. The screen pokes `/api/tasks`
+on load — which refreshes the cache when it is stale — and re-reads the
+command payload if that reported a refresh.
 
 ### `GET /api/command`
 
