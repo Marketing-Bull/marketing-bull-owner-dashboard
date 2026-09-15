@@ -36,8 +36,7 @@ describe("daily_history end to end", () => {
     const payload = (manual: ManualState) => ({
       manual,
       widgetOrder: [...DEFAULT_WIDGET_ORDER],
-      collapsed: [],
-      hiddenWidgets: []
+      collapsed: []
     });
 
     saveDashboardState(payload(withWin("mon win")), "2026-08-10");
