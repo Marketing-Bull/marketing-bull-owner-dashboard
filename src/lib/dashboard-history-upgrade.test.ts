@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
-import { DEFAULT_WIDGET_ORDER, LEGACY_WIDGET_ORDER } from "@/lib/dashboard-layout";
+import { DEFAULT_WIDGET_ORDER } from "@/lib/dashboard-layout";
 
 describe("existing database without daily_history", () => {
   it("gains the table and keeps its old rows", async () => {
@@ -65,7 +65,7 @@ describe("existing database without daily_history", () => {
       "kept whats important",
       // Old hyperfocus JSON still carries the retired streakDays field.
       JSON.stringify({ ...DEFAULT_MANUAL_STATE.hyperfocus, multiply: { streakDays: "5", dailyWin: "kept win" } }),
-      JSON.stringify(LEGACY_WIDGET_ORDER)
+      JSON.stringify([...DEFAULT_WIDGET_ORDER])
     );
     old.close();
 
@@ -87,7 +87,7 @@ describe("existing database without daily_history", () => {
 
     // The first save on the upgraded database begins the record.
     saveDashboardState(
-      { manual: state.manual, widgetOrder: state.widgetOrder, collapsed: state.collapsed, hiddenWidgets: state.hiddenWidgets },
+      { manual: state.manual, widgetOrder: state.widgetOrder, collapsed: state.collapsed },
       "2026-08-12"
     );
     expect(loadHistory("2026-08-12").map((entry) => entry.dailyWin)).toEqual(["kept win"]);
@@ -105,7 +105,9 @@ describe("existing database without daily_history", () => {
       "005-app-settings",
       "006-expenses-mileage",
       "007-clickup-task-associations",
-      "008-widget-visibility"
+      "008-widget-visibility",
+      "009-mileage-maps",
+      "010-dropdown-options"
     ]);
     upgraded.close();
 

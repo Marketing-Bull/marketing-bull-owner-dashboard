@@ -14,6 +14,8 @@ import {
   getExpenseSummary,
   getRecentExpenseDefaults,
   listExpenses,
+  parseExpenseQuery,
+  queryExpenses,
   setExpenseReceipt,
   updateExpense,
   upsertChartAccount,
@@ -74,5 +76,62 @@ describe("expenses", () => {
     expect(imported.amount).toBe(0);
     deleteExpense(db, current.id);
     expect(getExpense(db, current.id)).toBeNull();
+  });
+
+  it("queries accounting filters, pagination, filtered totals, and facets", () => {
+    const db = freshDb();
+    const client = createClient(db, { name: "Acme" });
+    const project = createProject(db, { name: "Launch", clientId: client.id });
+    const software = createExpense(db, {
+      projectId: project.id,
+      date: "2026-08-11",
+      amount: 50,
+      category: "Software",
+      company: "Marketing Bull",
+      vendor: "Figma",
+      details: "Design seats",
+      billable: true,
+      reimbursable: true,
+      recurring: "monthly",
+      recurringDay: 11,
+      paymentMethod: "Card",
+      status: "paid",
+      tags: "design,tools"
+    });
+    setExpenseReceipt(db, software.id, "figma.pdf", "receipt-1.pdf");
+    createExpense(db, { date: "2026-08-12", amount: 20, category: "Meals", vendor: "Cafe" });
+    createExpense(db, { date: "2026-08-13", amount: 300, category: "Revenue", kind: "income" });
+
+    const result = queryExpenses(db, parseExpenseQuery(new URLSearchParams({
+      pageSize: "25",
+      clientId: client.id,
+      projectId: project.id,
+      amountMin: "40",
+      amountMax: "60",
+      kind: "expense",
+      category: "Software",
+      company: "Marketing Bull",
+      vendor: "fig",
+      billable: "true",
+      reimbursable: "true",
+      recurring: "monthly",
+      recurringDayMin: "10",
+      paymentMethod: "Card",
+      status: "paid",
+      tags: "tools",
+      receiptAttached: "true",
+      annualizedMin: "600"
+    })));
+    expect(result.items.map((entry) => entry.id)).toEqual([software.id]);
+    expect(result.pageInfo.totalItems).toBe(1);
+    expect(result.filteredTotals).toEqual({ records: 1, expenses: 50, income: 0, reimbursable: 50, net: -50 });
+    expect(result.availableFacets.categories).toEqual([{ value: "Software", count: 1 }]);
+    expect(result.availableFacets.receipts).toEqual([{ value: "attached", count: 1 }]);
+  });
+
+  it("validates expense filter values and ranges", () => {
+    expect(() => parseExpenseQuery(new URLSearchParams("kind=refund"))).toThrow(/unsupported/i);
+    expect(() => parseExpenseQuery(new URLSearchParams("amountMin=10&amountMax=1"))).toThrow(/minimum/i);
+    expect(() => parseExpenseQuery(new URLSearchParams("recurringDayMin=0"))).toThrow(/at least 1/i);
   });
 });

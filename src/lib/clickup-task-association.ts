@@ -1,15 +1,7 @@
 import type { ClickUpTaskCacheInput } from "@/lib/clickup-task-cache";
-import type { Client, Project } from "@/lib/types";
+import type { Client, ClickUpAssociationSource, Project } from "@/lib/types";
 
-export type ClickUpAssociationSource =
-  | "project-custom-field"
-  | "project-tag"
-  | "project-list"
-  | "client-custom-field"
-  | "client-tag"
-  | "client-folder"
-  | "client-space"
-  | "none";
+export type { ClickUpAssociationSource };
 
 export type ClickUpTaskAssociation = {
   clientId: string | null;

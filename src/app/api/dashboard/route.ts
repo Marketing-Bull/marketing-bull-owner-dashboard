@@ -1,10 +1,6 @@
 import { NextResponse } from "next/server";
-import { fetchClickUpJson, getClickUpApiKey } from "@/lib/clickup";
-import {
-  ensureClickUpTasksFresh,
-  getClickUpTaskSyncInfo,
-  type ClickUpTaskCacheInput
-} from "@/lib/clickup-task-cache";
+import { getClickUpTaskSyncInfo, type ClickUpTaskCacheInput } from "@/lib/clickup-task-cache";
+import { syncClickUpTasks } from "@/lib/clickup-tasks";
 import { normalizeDashboardData } from "@/lib/dashboard-data";
 import { getDatabase, loadDashboardState } from "@/lib/dashboard-state";
 import { reportFallback } from "@/lib/fallback";
@@ -18,10 +14,6 @@ type BottleneckContext = {
   bottleneck: string;
   lens: string;
   target: string;
-};
-
-type ClickUpTasksResponse = {
-  tasks: ClickUpTaskCacheInput[];
 };
 
 function taskContext(task: ClickUpTaskCacheInput): string {
@@ -265,35 +257,9 @@ export async function GET() {
       target: state.manual.hyperfocus.target
     };
 
-    const teamId = process.env.OWNER_DASHBOARD_CLICKUP_TEAM_ID?.trim() || "9011565647";
-    const assigneeId = process.env.OWNER_DASHBOARD_CLICKUP_ASSIGNEE_ID?.trim() || "114143577";
-
-    const taskParams = new URLSearchParams();
-    taskParams.append("assignees[]", assigneeId);
-    taskParams.append("include_closed", "false");
-    taskParams.append("subtasks", "true");
-    taskParams.append("page", "0");
-
-    const sync = await ensureClickUpTasksFresh(
-      db,
-      async () => {
-        const apiKey = await getClickUpApiKey();
-        if (!apiKey) throw new Error("Missing ClickUp API key");
-        const tasks: ClickUpTaskCacheInput[] = [];
-        for (let page = 0; page < 100; page += 1) {
-          taskParams.set("page", String(page));
-          const tasksResponse = await fetchClickUpJson<ClickUpTasksResponse>(
-            `/team/${teamId}/task`,
-            taskParams,
-            apiKey
-          );
-          const pageTasks = tasksResponse.tasks || [];
-          tasks.push(...pageTasks);
-          if (pageTasks.length < 100) break;
-        }
-        return tasks;
-      }
-    );
+    // Same cache and same workspace query as the Tasks screen; see
+    // `@/lib/clickup-tasks`.
+    const sync = await syncClickUpTasks(db);
 
     if (sync.error && !sync.hadCache) {
       const fallbackReason = reportFallback("/api/dashboard ClickUp sync", sync.error);

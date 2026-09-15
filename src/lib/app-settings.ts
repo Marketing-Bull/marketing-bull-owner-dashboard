@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 
 const CLICKUP_API_KEY_SETTING = "clickup.api_key";
+const MAPS_ORS_API_KEY_SETTING = "maps.openrouteservice.api_key";
 
 type SettingRow = {
   value: string;
@@ -65,4 +66,29 @@ export function setStoredClickUpApiKey(db: DatabaseSync, apiKey: string): Stored
 export function deleteStoredClickUpApiKey(db: DatabaseSync): StoredSecretSummary {
   db.prepare("DELETE FROM app_settings WHERE key = ?").run(CLICKUP_API_KEY_SETTING);
   return getStoredClickUpApiKeySummary(db);
+}
+
+export function getStoredMapsApiKey(db: DatabaseSync): string | null {
+  const value = getSettingRow(db, MAPS_ORS_API_KEY_SETTING)?.value.trim();
+  return value || null;
+}
+
+export function getStoredMapsApiKeySummary(db: DatabaseSync): StoredSecretSummary {
+  const row = getSettingRow(db, MAPS_ORS_API_KEY_SETTING);
+  const value = row?.value.trim() || "";
+  return { configured: Boolean(value), maskedValue: value ? maskSecret(value) : null, updatedAt: value ? row?.updated_at ?? null : null };
+}
+
+export function setStoredMapsApiKey(db: DatabaseSync, apiKey: string): StoredSecretSummary {
+  const value = apiKey.trim();
+  if (!value) throw new Error("OpenRouteService API key cannot be blank.");
+  db.prepare(`INSERT INTO app_settings (key,value,updated_at) VALUES (?,?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`
+  ).run(MAPS_ORS_API_KEY_SETTING, value, nowIso());
+  return getStoredMapsApiKeySummary(db);
+}
+
+export function deleteStoredMapsApiKey(db: DatabaseSync): StoredSecretSummary {
+  db.prepare("DELETE FROM app_settings WHERE key = ?").run(MAPS_ORS_API_KEY_SETTING);
+  return getStoredMapsApiKeySummary(db);
 }
