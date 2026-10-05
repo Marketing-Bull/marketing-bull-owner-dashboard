@@ -89,3 +89,49 @@ export function stepHours(value: string, delta: number): string {
 export function presetLabel(hours: number): string {
   return hours < 1 ? `${Math.round(hours * 60)}m` : `${formatHours(hours)}h`;
 }
+
+const CLOCK_HHMM = /^(\d{1,2}):(\d{2})$/;
+
+/** Minutes since midnight from an HTML `type="time"` value (`HH:MM`). */
+function minutesFromHHmm(value: string): number | null {
+  const match = CLOCK_HHMM.exec(value.trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function hhmmFromMinutes(totalMinutes: number): string {
+  const day = 24 * 60;
+  const normalized = ((totalMinutes % day) + day) % day;
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+/**
+ * Decimal hours between two clock times. When end is not after start, the span
+ * wraps overnight (+24h). Returns null for unparseable clocks or spans the
+ * time entry table would refuse.
+ */
+export function hoursBetween(startHHmm: string, endHHmm: string): number | null {
+  const start = minutesFromHHmm(startHHmm);
+  const end = minutesFromHHmm(endHHmm);
+  if (start === null || end === null) return null;
+  let minutes = end - start;
+  if (minutes <= 0) minutes += 24 * 60;
+  return settle(minutes / 60);
+}
+
+/**
+ * End clock time after adding decimal hours to a start time. Wraps past midnight.
+ * Returns null when start or hours cannot be settled.
+ */
+export function addHoursToTime(startHHmm: string, hours: number): string | null {
+  const start = minutesFromHHmm(startHHmm);
+  if (start === null) return null;
+  const settled = settle(hours);
+  if (settled === null) return null;
+  return hhmmFromMinutes(start + Math.round(settled * 60));
+}

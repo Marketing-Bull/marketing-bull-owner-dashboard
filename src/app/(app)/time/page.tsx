@@ -9,7 +9,7 @@ import { HoursField } from "@/components/transactions/hours-field";
 import { RecordSheet } from "@/components/transactions/record-sheet";
 import { TransactionPage, TransactionPageHeader } from "@/components/transactions/transaction-page";
 import styles from "@/components/transactions/transaction-ledger.module.css";
-import { formatHours, MAX_HOURS, parseHoursInput } from "@/lib/hours-input";
+import { addHoursToTime, formatHours, hoursBetween, MAX_HOURS, parseHoursInput } from "@/lib/hours-input";
 import type { Client, Project, TimeEntry, TimeEntryRecentDefaults } from "@/lib/types";
 
 type TimeSort = "date" | "hours" | "rate" | "amount" | "details" | "billable" | "startTime" | "endTime" | "createdAt" | "updatedAt";
@@ -253,7 +253,19 @@ function TimeForm({
       <HoursField
         value={values.hours}
         error={hoursError}
-        onChange={(next) => { setHoursError(""); setValues((current) => ({ ...current, hours: next })); }}
+        onChange={(next) => {
+          setHoursError("");
+          setValues((current) => {
+            const updated = { ...current, hours: next };
+            const parsed = parseHoursInput(next);
+            // Hours stays source of truth when clocks are empty; when start is set, end follows.
+            if (parsed !== null && current.startTime) {
+              const endTime = addHoursToTime(current.startTime, parsed);
+              if (endTime) updated.endTime = endTime;
+            }
+            return updated;
+          });
+        }}
       />
       <label className={styles.sheetField}>
         <span className={styles.fieldLabel}>Client</span>
@@ -296,12 +308,33 @@ function TimeForm({
         <div className={styles.detailsGrid}>
           <label className={styles.sheetField}>
             <span className={styles.fieldLabel}>Start time</span>
-            <input className={styles.input} type="time" value={values.startTime} onChange={(event) => setValues((current) => ({ ...current, startTime: event.target.value }))} />
+            <input className={styles.input} type="time" value={values.startTime} onChange={(event) => {
+              const startTime = event.target.value;
+              setValues((current) => {
+                const updated = { ...current, startTime };
+                if (startTime && updated.endTime) {
+                  const between = hoursBetween(startTime, updated.endTime);
+                  if (between !== null) updated.hours = formatHours(between);
+                }
+                return updated;
+              });
+            }} />
           </label>
           <label className={styles.sheetField}>
             <span className={styles.fieldLabel}>End time</span>
-            <input className={styles.input} type="time" value={values.endTime} onChange={(event) => setValues((current) => ({ ...current, endTime: event.target.value }))} />
+            <input className={styles.input} type="time" value={values.endTime} onChange={(event) => {
+              const endTime = event.target.value;
+              setValues((current) => {
+                const updated = { ...current, endTime };
+                if (updated.startTime && endTime) {
+                  const between = hoursBetween(updated.startTime, endTime);
+                  if (between !== null) updated.hours = formatHours(between);
+                }
+                return updated;
+              });
+            }} />
           </label>
+          <p className={`${styles.addressHint} ${styles.spanAll}`}>When both start and end are set, Hours updates to match. Changing Hours with a start time updates end.</p>
         </div>
       </details>
     </form>

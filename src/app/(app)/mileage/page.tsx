@@ -8,6 +8,7 @@ import { FilterBar, FilterField, type ActiveFilter } from "@/components/transact
 import { RecordSheet } from "@/components/transactions/record-sheet";
 import { TransactionPage, TransactionPageHeader } from "@/components/transactions/transaction-page";
 import styles from "@/components/transactions/transaction-ledger.module.css";
+import { createRouteCalcLock } from "@/lib/route-calc-lock";
 import type { Client, MileageEntry, MileageRecentTrip, Project } from "@/lib/types";
 
 type Direction = "asc" | "desc";
@@ -54,13 +55,13 @@ function routeFields(result: RouteResult, route: RouteAlternative): Partial<Form
 }
 
 function AddressField({ label, value, configured, onChange, onSelect }: { label: string; value: string; configured: boolean; onChange: (value: string) => void; onSelect: (place: Place) => void }) {
-  const [suggestions, setSuggestions] = useState<Place[]>([]); const [busy, setBusy] = useState(false); const [typed, setTyped] = useState(""); const query = useDebouncedValue(typed, 350).trim();
+  const [suggestions, setSuggestions] = useState<Place[]>([]); const [busy, setBusy] = useState(false); const [typed, setTyped] = useState(""); const [searchNote, setSearchNote] = useState(""); const query = useDebouncedValue(typed, 350).trim();
   // Suggestions follow what was typed, not the field's value: the form rewrites
   // the address to the provider's normalized label after a route is
   // calculated, and that must not reopen the dropdown over a settled field.
   const editing = typed.trim() === value.trim();
-  useEffect(() => { if (!configured || query.length < 3 || query !== value.trim()) return; const controller = new AbortController(); const timer = window.setTimeout(() => { setBusy(true); void fetch(`/api/maps/autocomplete?q=${encodeURIComponent(query)}`, { signal: controller.signal }).then(async (response) => { const json = await response.json().catch(() => ({})); if (response.ok) setSuggestions(Array.isArray(json.suggestions) ? json.suggestions : []); }).catch(() => {}).finally(() => setBusy(false)); }, 0); return () => { window.clearTimeout(timer); controller.abort(); }; }, [configured, query, value]);
-  return <div className={`${styles.sheetField} ${styles.spanAll} ${styles.addressField}`}><label><span className={styles.fieldLabel}>{label}</span><input className={styles.input} autoComplete="street-address" value={value} placeholder={label === "From" ? "Starting address" : "Destination address"} onChange={(event) => { setTyped(event.target.value); onChange(event.target.value); setSuggestions([]); }} /></label>{busy && editing ? <span className={styles.addressHint}>Searching addresses…</span> : null}{editing && suggestions.length ? <div className={styles.addressSuggestions}>{suggestions.map((place) => <button key={place.id} type="button" onClick={() => { setTyped(place.label); onSelect(place); setSuggestions([]); }}>{place.label}</button>)}</div> : null}</div>;
+  useEffect(() => { if (!configured || query.length < 3 || query !== value.trim()) return; const controller = new AbortController(); const timer = window.setTimeout(() => { setBusy(true); void fetch(`/api/maps/autocomplete?q=${encodeURIComponent(query)}`, { signal: controller.signal }).then(async (response) => { const json = await response.json().catch(() => ({})); if (response.ok) { setSuggestions(Array.isArray(json.suggestions) ? json.suggestions : []); setSearchNote(""); } else { setSuggestions([]); setSearchNote(typeof json.error === "string" ? json.error : "Address search unavailable — enter miles manually."); } }).catch((error) => { if (error instanceof DOMException && error.name === "AbortError") return; setSuggestions([]); setSearchNote("Address search unavailable — enter miles manually."); }).finally(() => setBusy(false)); }, 0); return () => { window.clearTimeout(timer); controller.abort(); }; }, [configured, query, value]);
+  return <div className={`${styles.sheetField} ${styles.spanAll} ${styles.addressField}`}><label><span className={styles.fieldLabel}>{label}</span><input className={styles.input} autoComplete="street-address" value={value} placeholder={label === "From" ? "Starting address" : "Destination address"} onChange={(event) => { setTyped(event.target.value); onChange(event.target.value); setSuggestions([]); setSearchNote(""); }} /></label>{!configured ? <span className={styles.addressHint}>Maps not configured — type miles manually, or set an OpenRouteService key in Settings.</span> : null}{busy && editing ? <span className={styles.addressHint}>Searching addresses…</span> : null}{searchNote && editing ? <span className={styles.addressHint}>{searchNote}</span> : null}{editing && suggestions.length ? <div className={styles.addressSuggestions}>{suggestions.map((place) => <button key={place.id} type="button" onClick={() => { setTyped(place.label); onSelect(place); setSuggestions([]); setSearchNote(""); }}>{place.label}</button>)}</div> : null}</div>;
 }
 
 function MileageForm({ formId, initial, clients, projects, recent, rate, mapsConfigured, onDirtyChange, onSubmit }: { formId: string; initial: FormValues; clients: Client[]; projects: Project[]; recent: MileageRecentTrip[]; rate: number; mapsConfigured: boolean; onDirtyChange: (dirty: boolean) => void; onSubmit: (values: FormValues, addAnother: boolean) => void }) {
@@ -69,24 +70,27 @@ function MileageForm({ formId, initial, clients, projects, recent, rate, mapsCon
   // Every address pair is calculated at most once, and the pair the form opened
   // on counts as already calculated: saved and duplicated trips keep the miles
   // they were saved with instead of being silently restated on open.
-  const calculated = useRef(new Set([routeKey(initial.startAddress, initial.endAddress)])); const requestSeq = useRef(0);
+  // Failed attempts unlock the pair so the same addresses can retry.
+  const calculated = useRef(createRouteCalcLock([routeKey(initial.startAddress, initial.endAddress)])); const requestSeq = useRef(0);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const selectableProjects = projects.filter((project) => !values.clientId || project.clientId === values.clientId || project.id === values.projectId);
   const totalMiles = (Number(values.miles) || 0) * (values.roundTrip ? 2 : 1); const reimbursement = totalMiles * rate;
   const debouncedStart = useDebouncedValue(values.startAddress, 700); const debouncedEnd = useDebouncedValue(values.endAddress, 700);
-  const calculateRoute = useCallback(async (start: string | Place, end: string | Place) => {
+  const calculateRoute = useCallback(async (start: string | Place, end: string | Place): Promise<boolean> => {
     const seq = (requestSeq.current += 1); setRouteBusy(true); setRouteError("");
     try {
       const response = await fetch("/api/maps/distance", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ start, end }) });
       const json = await response.json().catch(() => ({}));
-      if (seq !== requestSeq.current) return;
+      if (seq !== requestSeq.current) return false;
       if (!response.ok) throw new Error(typeof json.error === "string" ? json.error : "Unable to calculate route.");
       const result = json as RouteResult; const route = result.routes[0];
       if (!route) throw new Error("No driving route was returned. Enter miles manually.");
-      setRouteResult(result); calculated.current.add(routeKey(result.start.label, result.end.label));
+      setRouteResult(result); calculated.current.succeed(routeKey(result.start.label, result.end.label));
       setValues((current) => ({ ...current, startAddress: result.start.label, endAddress: result.end.label, ...routeFields(result, route) }));
+      return true;
     } catch (caught) {
       if (seq === requestSeq.current) setRouteError(caught instanceof Error ? caught.message : String(caught));
+      return false;
     } finally { if (seq === requestSeq.current) setRouteBusy(false); }
   }, []);
   // Both addresses present is the whole trigger — typing them is as valid as
@@ -96,13 +100,12 @@ function MileageForm({ formId, initial, clients, projects, recent, rate, mapsCon
     const start = debouncedStart.trim(); const end = debouncedEnd.trim();
     if (start.length < MIN_ADDRESS_LENGTH || end.length < MIN_ADDRESS_LENGTH) return;
     const key = routeKey(start, end);
-    if (calculated.current.has(key)) return;
-    calculated.current.add(key);
-    void calculateRoute(startPlace?.label.trim() === start ? startPlace : start, endPlace?.label.trim() === end ? endPlace : end);
+    if (!calculated.current.begin(key)) return;
+    void calculateRoute(startPlace?.label.trim() === start ? startPlace : start, endPlace?.label.trim() === end ? endPlace : end).then((ok) => { if (!ok) calculated.current.fail(key); });
   }, [mapsConfigured, debouncedStart, debouncedEnd, startPlace, endPlace, calculateRoute]);
   function selectRoute(route: RouteAlternative) { if (!routeResult) return; setValues((current) => ({ ...current, ...routeFields(routeResult, route) })); }
   return <form id={formId} className={styles.sheetForm} onSubmit={(event) => { event.preventDefault(); const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null; onSubmit(values, submitter?.value === "another"); }}>
-    {recent.length > 0 ? <div className={styles.recentRouteSection}><span className={styles.fieldLabel}>Recent routes</span><div className={styles.recentRouteList}>{recent.slice(0, 4).map((route, index) => <button key={`${route.startAddress}-${route.endAddress}-${index}`} type="button" className={styles.recentRouteButton} onClick={() => { calculated.current.add(routeKey(route.startAddress, route.endAddress)); setRouteError(""); setValues((current) => ({ ...current, ...recentForm(route), date: current.date, clientId: current.clientId, projectId: current.projectId, billable: current.billable })); }}><strong>{route.tripName || `${route.startAddress} → ${route.endAddress}`}</strong><span>{route.miles.toFixed(1)} mi{route.roundTrip ? " each way · round trip" : " one way"}</span></button>)}</div></div> : null}
+    {recent.length > 0 ? <div className={styles.recentRouteSection}><span className={styles.fieldLabel}>Recent routes</span><div className={styles.recentRouteList}>{recent.slice(0, 4).map((route, index) => <button key={`${route.startAddress}-${route.endAddress}-${index}`} type="button" className={styles.recentRouteButton} onClick={() => { calculated.current.succeed(routeKey(route.startAddress, route.endAddress)); setRouteError(""); setValues((current) => ({ ...current, ...recentForm(route), date: current.date, clientId: current.clientId, projectId: current.projectId, billable: current.billable })); }}><strong>{route.tripName || `${route.startAddress} → ${route.endAddress}`}</strong><span>{route.miles.toFixed(1)} mi{route.roundTrip ? " each way · round trip" : " one way"}</span></button>)}</div></div> : null}
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Date</span><input className={styles.input} type="date" value={values.date} required onChange={(event) => setValues((current) => ({ ...current, date: event.target.value }))} /></label>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Trip name</span><input className={styles.input} value={values.tripName} placeholder="Office to client" autoFocus onChange={(event) => setValues((current) => ({ ...current, tripName: event.target.value }))} /></label>
     <AddressField label="From" value={values.startAddress} configured={mapsConfigured} onChange={(value) => { setStartPlace(null); setRouteResult(null); setValues((current) => ({ ...current, startAddress: value, calculationSource: "manual", calculationProvider: null, calculatedMiles: null, routeMetadataJson: null, calculatedAt: null, startPlaceId: null })); }} onSelect={(place) => { setStartPlace(place); setValues((current) => ({ ...current, startAddress: place.label, startPlaceId: place.id })); }} />
