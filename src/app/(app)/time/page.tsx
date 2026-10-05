@@ -9,7 +9,7 @@ import { HoursField } from "@/components/transactions/hours-field";
 import { RecordSheet } from "@/components/transactions/record-sheet";
 import { TransactionPage, TransactionPageHeader } from "@/components/transactions/transaction-page";
 import styles from "@/components/transactions/transaction-ledger.module.css";
-import { addHoursToTime, formatHours, hoursBetween, MAX_HOURS, parseHoursInput } from "@/lib/hours-input";
+import { addHoursToTime, formatHours, hoursBetween, isOvernightSpan, MAX_HOURS, parseHoursInput } from "@/lib/hours-input";
 import type { Client, Project, TimeEntry, TimeEntryRecentDefaults } from "@/lib/types";
 
 type TimeSort = "date" | "hours" | "rate" | "amount" | "details" | "billable" | "startTime" | "endTime" | "createdAt" | "updatedAt";
@@ -229,6 +229,9 @@ function TimeForm({
   const rate = frozenRate ?? selectedProject?.hourlyRateOverride ?? selectedClient?.hourlyRate ?? 0;
   const hours = parseHoursInput(values.hours);
   const estimated = (hours ?? 0) * rate;
+  // Same wrap rule as hoursBetween: end at or before start runs through midnight.
+  const overnight = Boolean(values.startTime && values.endTime) && isOvernightSpan(values.startTime, values.endTime);
+  const overnightHours = overnight ? hoursBetween(values.startTime, values.endTime) : null;
   const selectableProjects = projects.filter((project) => !values.clientId || project.clientId === values.clientId || project.id === values.projectId);
 
   return (
@@ -334,6 +337,11 @@ function TimeForm({
               });
             }} />
           </label>
+          {overnight ? (
+            <p className={`${styles.addressHint} ${styles.spanAll}`} role="status">
+              Overnight (+24h): end is at or before start, so this span runs through midnight{overnightHours === null ? "" : ` — ${formatHours(overnightHours)} hrs`}.
+            </p>
+          ) : null}
           <p className={`${styles.addressHint} ${styles.spanAll}`}>When both start and end are set, Hours updates to match. Changing Hours with a start time updates end.</p>
         </div>
       </details>

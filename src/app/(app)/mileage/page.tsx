@@ -8,6 +8,7 @@ import { FilterBar, FilterField, type ActiveFilter } from "@/components/transact
 import { RecordSheet } from "@/components/transactions/record-sheet";
 import { TransactionPage, TransactionPageHeader } from "@/components/transactions/transaction-page";
 import styles from "@/components/transactions/transaction-ledger.module.css";
+import { milesAfterAddressChange, staleMilesHint, type MilesStaleState } from "@/lib/mileage-form";
 import { createRouteCalcLock } from "@/lib/route-calc-lock";
 import type { Client, MileageEntry, MileageRecentTrip, Project } from "@/lib/types";
 
@@ -67,6 +68,7 @@ function AddressField({ label, value, configured, onChange, onSelect }: { label:
 function MileageForm({ formId, initial, clients, projects, recent, rate, mapsConfigured, onDirtyChange, onSubmit }: { formId: string; initial: FormValues; clients: Client[]; projects: Project[]; recent: MileageRecentTrip[]; rate: number; mapsConfigured: boolean; onDirtyChange: (dirty: boolean) => void; onSubmit: (values: FormValues, addAnother: boolean) => void }) {
   const [values, setValues] = useState(initial); const dirty = JSON.stringify(values) !== JSON.stringify(initial);
   const [startPlace, setStartPlace] = useState<Place | null>(null); const [endPlace, setEndPlace] = useState<Place | null>(null); const [routeResult, setRouteResult] = useState<RouteResult | null>(null); const [routeBusy, setRouteBusy] = useState(false); const [routeError, setRouteError] = useState("");
+  const [milesStale, setMilesStale] = useState<MilesStaleState>(null);
   // Every address pair is calculated at most once, and the pair the form opened
   // on counts as already calculated: saved and duplicated trips keep the miles
   // they were saved with instead of being silently restated on open.
@@ -75,7 +77,10 @@ function MileageForm({ formId, initial, clients, projects, recent, rate, mapsCon
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const selectableProjects = projects.filter((project) => !values.clientId || project.clientId === values.clientId || project.id === values.projectId);
   const totalMiles = (Number(values.miles) || 0) * (values.roundTrip ? 2 : 1); const reimbursement = totalMiles * rate;
-  const debouncedStart = useDebouncedValue(values.startAddress, 700); const debouncedEnd = useDebouncedValue(values.endAddress, 700);
+  // One debounced value for the pair plus an edit counter: retyping an address
+  // back to the same text still settles (and re-routes) after the lock is reset.
+  const [addressEdits, setAddressEdits] = useState(0);
+  const debouncedPair = useDebouncedValue(JSON.stringify([values.startAddress, values.endAddress, addressEdits]), 700);
   const calculateRoute = useCallback(async (start: string | Place, end: string | Place): Promise<boolean> => {
     const seq = (requestSeq.current += 1); setRouteBusy(true); setRouteError("");
     try {
@@ -85,7 +90,7 @@ function MileageForm({ formId, initial, clients, projects, recent, rate, mapsCon
       if (!response.ok) throw new Error(typeof json.error === "string" ? json.error : "Unable to calculate route.");
       const result = json as RouteResult; const route = result.routes[0];
       if (!route) throw new Error("No driving route was returned. Enter miles manually.");
-      setRouteResult(result); calculated.current.succeed(routeKey(result.start.label, result.end.label));
+      setRouteResult(result); setMilesStale(null); calculated.current.succeed(routeKey(result.start.label, result.end.label));
       setValues((current) => ({ ...current, startAddress: result.start.label, endAddress: result.end.label, ...routeFields(result, route) }));
       return true;
     } catch (caught) {
@@ -97,20 +102,30 @@ function MileageForm({ formId, initial, clients, projects, recent, rate, mapsCon
   // picking them from the suggestion list, and a trip is not entered twice.
   useEffect(() => {
     if (!mapsConfigured) return;
-    const start = debouncedStart.trim(); const end = debouncedEnd.trim();
+    const [rawStart, rawEnd] = JSON.parse(debouncedPair) as [string, string, number];
+    const start = rawStart.trim(); const end = rawEnd.trim();
     if (start.length < MIN_ADDRESS_LENGTH || end.length < MIN_ADDRESS_LENGTH) return;
     const key = routeKey(start, end);
     if (!calculated.current.begin(key)) return;
     void calculateRoute(startPlace?.label.trim() === start ? startPlace : start, endPlace?.label.trim() === end ? endPlace : end).then((ok) => { if (!ok) calculated.current.fail(key); });
-  }, [mapsConfigured, debouncedStart, debouncedEnd, startPlace, endPlace, calculateRoute]);
-  function selectRoute(route: RouteAlternative) { if (!routeResult) return; setValues((current) => ({ ...current, ...routeFields(routeResult, route) })); }
+  }, [mapsConfigured, debouncedPair, startPlace, endPlace, calculateRoute]);
+  function selectRoute(route: RouteAlternative) { if (!routeResult) return; setMilesStale(null); setValues((current) => ({ ...current, ...routeFields(routeResult, route) })); }
+  // Editing an address invalidates the miles: provider miles are cleared, typed
+  // miles are kept but flagged, and the route lock is reset so the pair the
+  // fields settle on (even the one the form opened on) auto-routes again.
+  function addressChanged(patch: Partial<FormValues>) {
+    setMilesStale(milesAfterAddressChange(values, milesStale).stale);
+    setRouteResult(null); calculated.current.clear(); setAddressEdits((count) => count + 1);
+    setValues((current) => ({ ...current, ...patch, miles: milesAfterAddressChange(current).miles, calculationSource: "manual", calculationProvider: null, calculatedMiles: null, routeMetadataJson: null, calculatedAt: null }));
+  }
+  const staleHint = staleMilesHint(milesStale, mapsConfigured);
   return <form id={formId} className={styles.sheetForm} onSubmit={(event) => { event.preventDefault(); const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null; onSubmit(values, submitter?.value === "another"); }}>
-    {recent.length > 0 ? <div className={styles.recentRouteSection}><span className={styles.fieldLabel}>Recent routes</span><div className={styles.recentRouteList}>{recent.slice(0, 4).map((route, index) => <button key={`${route.startAddress}-${route.endAddress}-${index}`} type="button" className={styles.recentRouteButton} onClick={() => { calculated.current.succeed(routeKey(route.startAddress, route.endAddress)); setRouteError(""); setValues((current) => ({ ...current, ...recentForm(route), date: current.date, clientId: current.clientId, projectId: current.projectId, billable: current.billable })); }}><strong>{route.tripName || `${route.startAddress} → ${route.endAddress}`}</strong><span>{route.miles.toFixed(1)} mi{route.roundTrip ? " each way · round trip" : " one way"}</span></button>)}</div></div> : null}
+    {recent.length > 0 ? <div className={styles.recentRouteSection}><span className={styles.fieldLabel}>Recent routes</span><div className={styles.recentRouteList}>{recent.slice(0, 4).map((route, index) => <button key={`${route.startAddress}-${route.endAddress}-${index}`} type="button" className={styles.recentRouteButton} onClick={() => { calculated.current.succeed(routeKey(route.startAddress, route.endAddress)); setRouteError(""); setMilesStale(null); setValues((current) => ({ ...current, ...recentForm(route), date: current.date, clientId: current.clientId, projectId: current.projectId, billable: current.billable })); }}><strong>{route.tripName || `${route.startAddress} → ${route.endAddress}`}</strong><span>{route.miles.toFixed(1)} mi{route.roundTrip ? " each way · round trip" : " one way"}</span></button>)}</div></div> : null}
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Date</span><input className={styles.input} type="date" value={values.date} required onChange={(event) => setValues((current) => ({ ...current, date: event.target.value }))} /></label>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Trip name</span><input className={styles.input} value={values.tripName} placeholder="Office to client" autoFocus onChange={(event) => setValues((current) => ({ ...current, tripName: event.target.value }))} /></label>
-    <AddressField label="From" value={values.startAddress} configured={mapsConfigured} onChange={(value) => { setStartPlace(null); setRouteResult(null); setValues((current) => ({ ...current, startAddress: value, calculationSource: "manual", calculationProvider: null, calculatedMiles: null, routeMetadataJson: null, calculatedAt: null, startPlaceId: null })); }} onSelect={(place) => { setStartPlace(place); setValues((current) => ({ ...current, startAddress: place.label, startPlaceId: place.id })); }} />
-    <AddressField label="To" value={values.endAddress} configured={mapsConfigured} onChange={(value) => { setEndPlace(null); setRouteResult(null); setValues((current) => ({ ...current, endAddress: value, calculationSource: "manual", calculationProvider: null, calculatedMiles: null, routeMetadataJson: null, calculatedAt: null, endPlaceId: null })); }} onSelect={(place) => { setEndPlace(place); setValues((current) => ({ ...current, endAddress: place.label, endPlaceId: place.id })); }} />
-    <label className={styles.sheetField}><span className={styles.fieldLabel}>One-way miles</span><input className={styles.input} type="number" inputMode="decimal" min="0.01" max="10000" step="0.01" value={values.miles} required onChange={(event) => setValues((current) => ({ ...current, miles: event.target.value, calculationSource: "manual", calculationProvider: null, calculatedMiles: null, routeMetadataJson: null, calculatedAt: null }))} /><span className={styles.addressHint}>{routeBusy ? "Calculating driving distance…" : values.calculationSource === "provider" ? `Calculated by ${values.calculationProvider}` : "Manual mileage"}</span></label>
+    <AddressField label="From" value={values.startAddress} configured={mapsConfigured} onChange={(value) => { setStartPlace(null); addressChanged({ startAddress: value, startPlaceId: null }); }} onSelect={(place) => { setStartPlace(place); setValues((current) => ({ ...current, startAddress: place.label, startPlaceId: place.id })); }} />
+    <AddressField label="To" value={values.endAddress} configured={mapsConfigured} onChange={(value) => { setEndPlace(null); addressChanged({ endAddress: value, endPlaceId: null }); }} onSelect={(place) => { setEndPlace(place); setValues((current) => ({ ...current, endAddress: place.label, endPlaceId: place.id })); }} />
+    <label className={styles.sheetField}><span className={styles.fieldLabel}>One-way miles</span><input className={styles.input} type="number" inputMode="decimal" min="0.01" max="10000" step="0.01" value={values.miles} required onChange={(event) => { setMilesStale(null); setValues((current) => ({ ...current, miles: event.target.value, calculationSource: "manual", calculationProvider: null, calculatedMiles: null, routeMetadataJson: null, calculatedAt: null })); }} /><span className={styles.addressHint}>{routeBusy ? "Calculating driving distance…" : values.calculationSource === "provider" ? `Calculated by ${values.calculationProvider}` : "Manual mileage"}</span>{staleHint && !routeBusy ? <span className={styles.addressHint} role="status">{staleHint}</span> : null}</label>
     <label className={styles.toggleField}><span>Round trip</span><input type="checkbox" checked={values.roundTrip} onChange={(event) => setValues((current) => ({ ...current, roundTrip: event.target.checked }))} /></label>
     <div className={styles.routeControls}><button type="button" className={styles.secondaryButton} disabled={!mapsConfigured || routeBusy || values.startAddress.trim().length < MIN_ADDRESS_LENGTH || values.endAddress.trim().length < MIN_ADDRESS_LENGTH} onClick={() => void calculateRoute(startPlace?.label.trim() === values.startAddress.trim() ? startPlace : values.startAddress.trim(), endPlace?.label.trim() === values.endAddress.trim() ? endPlace : values.endAddress.trim())}>{routeBusy ? "Calculating…" : routeResult ? "Recalculate driving route" : "Calculate driving route"}</button>{!mapsConfigured ? <span>Configure Maps in Settings, or enter miles manually.</span> : <span>Miles update automatically once both addresses are entered.</span>}{routeError ? <span className={styles.routeError}>{routeError} Enter miles manually to save this trip.</span> : null}</div>
     {routeResult && routeResult.routes.length > 1 ? <label className={`${styles.sheetField} ${styles.spanAll}`}><span className={styles.fieldLabel}>Route</span><select className={styles.select} value={String(values.calculatedMiles ?? "")} onChange={(event) => { const route = routeResult.routes.find((candidate) => String(candidate.miles) === event.target.value); if (route) selectRoute(route); }}>{routeResult.routes.map((route) => <option key={route.id} value={String(route.miles)}>{route.label} · {route.miles.toFixed(2)} mi · {route.durationMinutes} min</option>)}</select></label> : null}
