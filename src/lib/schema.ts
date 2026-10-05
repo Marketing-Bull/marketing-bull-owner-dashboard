@@ -425,5 +425,18 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
         insert.run(crypto.randomUUID(), label, label.trim().toLowerCase(), index, now, now);
       });
     }
+  },
+  {
+    // Accounts payable: expenses can be unpaid (due) or paid. Existing ledger
+    // rows default to paid so history is not suddenly due; the app defaults
+    // new creates to unpaid. Optional paid_on records when it was settled.
+    id: "011-expense-paid",
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE expenses ADD COLUMN paid INTEGER NOT NULL DEFAULT 1 CHECK (paid IN (0, 1));
+        ALTER TABLE expenses ADD COLUMN paid_on TEXT;
+        CREATE INDEX idx_expenses_paid ON expenses(paid);
+      `);
+    }
   }
 ];

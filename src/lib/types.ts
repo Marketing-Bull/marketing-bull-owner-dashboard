@@ -183,6 +183,10 @@ export type Expense = {
   accountCode: string | null;
   billable: boolean;
   reimbursable: boolean;
+  /** False = accounts payable / due. */
+  paid: boolean;
+  /** Calendar day the expense was marked paid, when known. */
+  paidOn: string | null;
   recurring: ExpenseFrequency;
   recurringDay: number | null;
   paymentMethod: string;

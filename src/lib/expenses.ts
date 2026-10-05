@@ -54,6 +54,8 @@ export const EXPENSE_SORTS = [
   "accountCode",
   "billable",
   "reimbursable",
+  "paid",
+  "paidOn",
   "recurring",
   "paymentMethod",
   "status",
@@ -87,6 +89,9 @@ export type ExpenseQuery = {
   accountCodes?: string[];
   billable?: boolean;
   reimbursable?: boolean;
+  paid?: boolean;
+  paidFrom?: string;
+  paidTo?: string;
   recurring?: ExpenseFrequency[];
   recurringDayMin?: number;
   recurringDayMax?: number;
@@ -108,6 +113,7 @@ export type ExpenseQueryTotals = {
   expenses: number;
   income: number;
   reimbursable: number;
+  unpaid: number;
   net: number;
 };
 
@@ -123,6 +129,7 @@ export type ExpenseQueryFacets = {
   recurring: FacetCount[];
   billable: FacetCount[];
   reimbursable: FacetCount[];
+  paid: FacetCount[];
   receipts: FacetCount[];
 };
 
@@ -150,6 +157,9 @@ export type ExpenseInput = {
   accountCode?: string | null;
   billable?: boolean;
   reimbursable?: boolean;
+  /** Defaults to unpaid (false) on create for AP workflow. */
+  paid?: boolean;
+  paidOn?: string | null;
   recurring?: ExpenseFrequency;
   recurringDay?: number | null;
   paymentMethod?: string;
@@ -300,6 +310,9 @@ function rowToExpense(row: Row): Expense {
     accountCode: row.account_code == null ? null : String(row.account_code),
     billable: Boolean(row.billable),
     reimbursable: Boolean(row.reimbursable),
+    // Missing column (pre-migration read) treats as paid — historical ledger.
+    paid: row.paid === undefined || row.paid === null ? true : Boolean(row.paid),
+    paidOn: row.paid_on == null || row.paid_on === "" ? null : String(row.paid_on),
     recurring,
     recurringDay: row.recurring_day == null ? null : Number(row.recurring_day),
     paymentMethod: text(row.payment_method),
@@ -423,6 +436,9 @@ export function parseExpenseQuery(params: URLSearchParams): ExpenseQuery {
     accountCodes: listParam(params, "accountCode"),
     billable: booleanParam(params, "billable"),
     reimbursable: booleanParam(params, "reimbursable"),
+    paid: booleanParam(params, "paid"),
+    paidFrom: dateParam(params, "paidFrom"),
+    paidTo: dateParam(params, "paidTo"),
     recurring: enumListParam(params, "recurring", EXPENSE_FREQUENCIES),
     recurringDayMin: numberParam(params, "recurringDayMin", { min: 1, max: 31, integer: true }),
     recurringDayMax: numberParam(params, "recurringDayMax", { min: 1, max: 31, integer: true }),
@@ -444,6 +460,7 @@ export function parseExpenseQuery(params: URLSearchParams): ExpenseQuery {
   assertRange(query.annualizedMin, query.annualizedMax, "Annualized amount");
   assertRange(query.createdFrom, query.createdTo, "Created date");
   assertRange(query.updatedFrom, query.updatedTo, "Updated date");
+  assertRange(query.paidFrom, query.paidTo, "Paid date");
   return query;
 }
 
@@ -483,6 +500,9 @@ function expenseWhere(query: ExpenseQuery): { where: string; params: QueryScalar
   addInFilter(clauses, params, "account_code", query.accountCodes);
   exact("billable", query.billable === undefined ? undefined : query.billable ? 1 : 0);
   exact("reimbursable", query.reimbursable === undefined ? undefined : query.reimbursable ? 1 : 0);
+  exact("paid", query.paid === undefined ? undefined : query.paid ? 1 : 0);
+  minimum("paid_on", query.paidFrom);
+  maximum("paid_on", query.paidTo);
   addInFilter(clauses, params, "recurring", query.recurring);
   minimum("recurring_day", query.recurringDayMin);
   maximum("recurring_day", query.recurringDayMax);
@@ -529,6 +549,8 @@ export function queryExpenses(
     accountCode: "account_code",
     billable: "billable",
     reimbursable: "reimbursable",
+    paid: "paid",
+    paidOn: "paid_on",
     recurring: "recurring",
     paymentMethod: "payment_method COLLATE NOCASE",
     status: "status COLLATE NOCASE",
@@ -547,7 +569,8 @@ export function queryExpenses(
       COUNT(*) AS records,
       COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0) AS expenses,
       COALESCE(SUM(CASE WHEN kind = 'income' THEN amount ELSE 0 END), 0) AS income,
-      COALESCE(SUM(CASE WHEN kind = 'expense' AND reimbursable = 1 THEN amount ELSE 0 END), 0) AS reimbursable
+      COALESCE(SUM(CASE WHEN kind = 'expense' AND reimbursable = 1 THEN amount ELSE 0 END), 0) AS reimbursable,
+      COALESCE(SUM(CASE WHEN kind = 'expense' AND paid = 0 THEN amount ELSE 0 END), 0) AS unpaid
     FROM expenses ${where}`).get(...params) as Record<string, number>;
   const expenses = Number(totals.expenses);
   const income = Number(totals.income);
@@ -559,6 +582,7 @@ export function queryExpenses(
       expenses,
       income,
       reimbursable: Number(totals.reimbursable),
+      unpaid: Number(totals.unpaid),
       net: income - expenses
     },
     availableFacets: {
@@ -573,6 +597,7 @@ export function queryExpenses(
       recurring: facetCounts(db, "expenses", "recurring", where, params),
       billable: facetCounts(db, "expenses", "billable", where, params, { includeEmpty: true }),
       reimbursable: facetCounts(db, "expenses", "reimbursable", where, params, { includeEmpty: true }),
+      paid: facetCounts(db, "expenses", "paid", where, params, { includeEmpty: true }),
       receipts: facetCounts(
         db,
         "expenses",
@@ -583,6 +608,15 @@ export function queryExpenses(
       )
     }
   };
+}
+
+
+/** Resolve paid flag + optional paid_on. Unpaid clears the date; marking paid
+ * without a date leaves paid_on null (caller/UI may fill later). */
+function resolvePaidFields(paid: boolean, paidOn: unknown): { paid: boolean; paidOn: string | null } {
+  if (!paid) return { paid: false, paidOn: null };
+  if (paidOn == null || paidOn === "") return { paid: true, paidOn: null };
+  return { paid: true, paidOn: validateDate(paidOn, "Paid on") };
 }
 
 function validatedExpense(db: DatabaseSync, input: ExpenseInput) {
@@ -601,23 +635,30 @@ function validatedExpense(db: DatabaseSync, input: ExpenseInput) {
   }
   if (input.billable !== undefined) bool(input.billable, "Billable");
   if (input.reimbursable !== undefined) bool(input.reimbursable, "Reimbursable");
+  if (input.paid !== undefined) bool(input.paid, "Paid");
+  const paidFields = resolvePaidFields(input.paid ?? false, input.paidOn);
   return { date, amount, category, kind, recurring, recurringDay: validateDay(input.recurringDay),
-    accountCode: validateAccount(db, input.accountCode), recurringExpenseId, ...relations };
+    accountCode: validateAccount(db, input.accountCode), recurringExpenseId, ...paidFields, ...relations };
 }
 
 export function createExpense(db: DatabaseSync, input: ExpenseInput): Expense {
-  const value = validatedExpense(db, input);
+  const value = validatedExpense(db, {
+    ...input,
+    // New ledger rows start unpaid (AP) unless the caller opts into paid.
+    paid: input.paid ?? false
+  });
   const id = newEntityId();
   const now = nowIso();
   db.prepare(`INSERT INTO expenses (
     id, mc_id, client_id, project_id, recurring_expense_id, date, amount, kind, category,
-    company, vendor, details, account_code, billable, reimbursable, recurring, recurring_day,
+    company, vendor, details, account_code, billable, reimbursable, paid, paid_on, recurring, recurring_day,
     payment_method, status, tags, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(id, input.mcId ?? null, value.clientId, value.projectId, value.recurringExpenseId,
     value.date, value.amount, value.kind, value.category, text(input.company), text(input.vendor),
     typeof input.details === "string" ? input.details.trim() : "", value.accountCode,
-    input.billable ? 1 : 0, input.reimbursable ? 1 : 0, value.recurring, value.recurringDay,
+    input.billable ? 1 : 0, input.reimbursable ? 1 : 0, value.paid ? 1 : 0, value.paidOn,
+    value.recurring, value.recurringDay,
     text(input.paymentMethod), text(input.status), text(input.tags), input.createdAt ?? now, now);
   return getExpense(db, id)!;
 }
@@ -639,6 +680,8 @@ export function updateExpense(db: DatabaseSync, id: string, patch: Partial<Expen
     accountCode: patch.accountCode === undefined ? existing.accountCode : patch.accountCode,
     billable: patch.billable ?? existing.billable,
     reimbursable: patch.reimbursable ?? existing.reimbursable,
+    paid: patch.paid ?? existing.paid,
+    paidOn: patch.paidOn === undefined ? existing.paidOn : patch.paidOn,
     recurring: patch.recurring ?? existing.recurring,
     recurringDay: patch.recurringDay === undefined ? existing.recurringDay : patch.recurringDay,
     paymentMethod: patch.paymentMethod ?? existing.paymentMethod,
@@ -649,10 +692,11 @@ export function updateExpense(db: DatabaseSync, id: string, patch: Partial<Expen
   const value = validatedExpense(db, input);
   db.prepare(`UPDATE expenses SET client_id=?, project_id=?, recurring_expense_id=?, date=?, amount=?,
     kind=?, category=?, company=?, vendor=?, details=?, account_code=?, billable=?, reimbursable=?,
-    recurring=?, recurring_day=?, payment_method=?, status=?, tags=?, updated_at=? WHERE id=?`
+    paid=?, paid_on=?, recurring=?, recurring_day=?, payment_method=?, status=?, tags=?, updated_at=? WHERE id=?`
   ).run(value.clientId, value.projectId, value.recurringExpenseId, value.date, value.amount, value.kind,
     value.category, text(input.company), text(input.vendor), text(input.details), value.accountCode,
-    input.billable ? 1 : 0, input.reimbursable ? 1 : 0, value.recurring, value.recurringDay,
+    input.billable ? 1 : 0, input.reimbursable ? 1 : 0, value.paid ? 1 : 0, value.paidOn,
+    value.recurring, value.recurringDay,
     text(input.paymentMethod), text(input.status), text(input.tags), nowIso(), id);
   return getExpense(db, id)!;
 }
@@ -676,13 +720,19 @@ export function getRecentExpenseDefaults(db: DatabaseSync): ExpenseRecentDefault
     accountCode: row.account_code == null ? null : String(row.account_code), paymentMethod: text(row.payment_method) } : null;
 }
 
-export function getExpenseSummary(db: DatabaseSync): { expenses: number; income: number; reimbursable: number } {
+export function getExpenseSummary(db: DatabaseSync): { expenses: number; income: number; reimbursable: number; unpaid: number } {
   const row = db.prepare(`SELECT
     COALESCE(SUM(CASE WHEN kind='expense' THEN amount ELSE 0 END),0) AS expenses,
     COALESCE(SUM(CASE WHEN kind='income' THEN amount ELSE 0 END),0) AS income,
-    COALESCE(SUM(CASE WHEN kind='expense' AND reimbursable=1 THEN amount ELSE 0 END),0) AS reimbursable
-    FROM expenses`).get() as { expenses: number; income: number; reimbursable: number };
-  return { expenses: Number(row.expenses), income: Number(row.income), reimbursable: Number(row.reimbursable) };
+    COALESCE(SUM(CASE WHEN kind='expense' AND reimbursable=1 THEN amount ELSE 0 END),0) AS reimbursable,
+    COALESCE(SUM(CASE WHEN kind='expense' AND paid=0 THEN amount ELSE 0 END),0) AS unpaid
+    FROM expenses`).get() as { expenses: number; income: number; reimbursable: number; unpaid: number };
+  return {
+    expenses: Number(row.expenses),
+    income: Number(row.income),
+    reimbursable: Number(row.reimbursable),
+    unpaid: Number(row.unpaid)
+  };
 }
 
 export function getRecurringExpense(db: DatabaseSync, id: string): RecurringExpense | null {

@@ -32,7 +32,8 @@ export async function GET(request: Request) {
       summary: {
         expenses: result.filteredTotals.expenses,
         income: result.filteredTotals.income,
-        reimbursable: result.filteredTotals.reimbursable
+        reimbursable: result.filteredTotals.reimbursable,
+        unpaid: result.filteredTotals.unpaid
       }
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
       company: input.company as string | undefined, vendor: input.vendor as string | undefined,
       details: input.details as string | undefined, accountCode: input.accountCode as string | null | undefined,
       billable: input.billable as boolean | undefined, reimbursable: input.reimbursable as boolean | undefined,
+      paid: input.paid as boolean | undefined, paidOn: input.paidOn as string | null | undefined,
       recurring: input.recurring as never, recurringDay: input.recurringDay as number | null | undefined,
       paymentMethod: input.paymentMethod as string | undefined, status: input.status as string | undefined,
       tags: input.tags as string | undefined

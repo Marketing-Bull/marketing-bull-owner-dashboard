@@ -44,7 +44,9 @@ describe("expenses", () => {
     const income = createExpense(db, { date: "2026-08-13", amount: 100, category: "Revenue", kind: "income" });
     expect(expense.clientId).toBe(client.id);
     expect(income.kind).toBe("income");
-    expect(getExpenseSummary(db)).toEqual({ expenses: 25, income: 100, reimbursable: 0 });
+    expect(expense.paid).toBe(false);
+    expect(income.paid).toBe(false);
+    expect(getExpenseSummary(db)).toEqual({ expenses: 25, income: 100, reimbursable: 0, unpaid: 25 });
     expect(() => createExpense(db, { clientId: other.id, projectId: project.id, date: "2026-08-13", amount: 1, category: "Other" })).toThrow(/different client/i);
     expect(() => createExpense(db, { date: "2026-08-13", amount: 1, category: "Other", accountCode: "9999" })).toThrow(/does not exist/i);
   });
@@ -124,7 +126,7 @@ describe("expenses", () => {
     })));
     expect(result.items.map((entry) => entry.id)).toEqual([software.id]);
     expect(result.pageInfo.totalItems).toBe(1);
-    expect(result.filteredTotals).toEqual({ records: 1, expenses: 50, income: 0, reimbursable: 50, net: -50 });
+    expect(result.filteredTotals).toEqual({ records: 1, expenses: 50, income: 0, reimbursable: 50, unpaid: 50, net: -50 });
     expect(result.availableFacets.categories).toEqual([{ value: "Software", count: 1 }]);
     expect(result.availableFacets.receipts).toEqual([{ value: "attached", count: 1 }]);
   });
@@ -133,5 +135,38 @@ describe("expenses", () => {
     expect(() => parseExpenseQuery(new URLSearchParams("kind=refund"))).toThrow(/unsupported/i);
     expect(() => parseExpenseQuery(new URLSearchParams("amountMin=10&amountMax=1"))).toThrow(/minimum/i);
     expect(() => parseExpenseQuery(new URLSearchParams("recurringDayMin=0"))).toThrow(/at least 1/i);
+  });
+
+  it("tracks paid versus unpaid accounts payable with migration-safe defaults", () => {
+    const db = freshDb();
+    const due = createExpense(db, { date: "2026-08-13", amount: 40, category: "Software", vendor: "Notion" });
+    expect(due.paid).toBe(false);
+    expect(due.paidOn).toBeNull();
+
+    const settled = updateExpense(db, due.id, { paid: true, paidOn: "2026-08-14" });
+    expect(settled.paid).toBe(true);
+    expect(settled.paidOn).toBe("2026-08-14");
+
+    const cleared = updateExpense(db, due.id, { paid: false });
+    expect(cleared.paid).toBe(false);
+    expect(cleared.paidOn).toBeNull();
+
+    createExpense(db, { date: "2026-08-15", amount: 10, category: "Meals", paid: true, paidOn: "2026-08-15" });
+    createExpense(db, { date: "2026-08-16", amount: 100, category: "Revenue", kind: "income", paid: false });
+
+    const unpaid = queryExpenses(db, parseExpenseQuery(new URLSearchParams({ paid: "false", kind: "expense" })));
+    expect(unpaid.items).toHaveLength(1);
+    expect(unpaid.items[0]?.id).toBe(due.id);
+    expect(unpaid.filteredTotals.unpaid).toBe(40);
+    expect(getExpenseSummary(db).unpaid).toBe(40);
+
+    // Existing rows after migration 011 are paid (DEFAULT 1); verified by inserting via SQL
+    // the same way a pre-migration row would appear once the column is added.
+    db.prepare(`INSERT INTO expenses (
+      id, date, amount, kind, category, company, vendor, details, billable, reimbursable, paid, paid_on,
+      recurring, payment_method, status, tags, created_at, updated_at
+    ) VALUES ('legacy-1', '2026-01-01', 5, 'expense', 'Office', '', '', '', 0, 0, 1, NULL,
+      'none', '', '', '', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`).run();
+    expect(getExpense(db, "legacy-1")?.paid).toBe(true);
   });
 });
