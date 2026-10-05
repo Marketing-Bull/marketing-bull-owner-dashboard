@@ -1,12 +1,12 @@
 name: CI
 
 on:
-  # The integration and release branches. `main` is retired -- it stopped
-  # moving at 46a0ee9 and carries nothing the others lack, so keeping it here
-  # meant every push to preview and stable landed with no CI at all. Pull
-  # requests are covered separately below, whatever their target.
+  # `stable` is the only long-lived branch: work lands on it through pull
+  # requests, and the live host runs it. There is no `preview` integration
+  # branch any more, and `main` is retired. Pull requests are covered
+  # separately below, whatever their target.
   push:
-    branches: ["preview", "stable"]
+    branches: ["stable"]
   pull_request:
   workflow_dispatch:
 
