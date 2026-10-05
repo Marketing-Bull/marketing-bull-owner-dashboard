@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { describeHours, formatHours, parseHoursInput, presetLabel, stepHours } from "@/lib/hours-input";
+import {
+  addHoursToTime,
+  describeHours,
+  formatHours,
+  hoursBetween,
+  parseHoursInput,
+  presetLabel,
+  stepHours
+} from "@/lib/hours-input";
 
 describe("hours input", () => {
   it("reads decimals exactly as typed", () => {
@@ -52,5 +60,39 @@ describe("hours input", () => {
     expect(presetLabel(0.75)).toBe("45m");
     expect(presetLabel(1)).toBe("1h");
     expect(presetLabel(1.5)).toBe("1.5h");
+  });
+});
+
+describe("hoursBetween / addHoursToTime", () => {
+  it("computes same-day spans", () => {
+    expect(hoursBetween("09:00", "10:30")).toBe(1.5);
+    expect(hoursBetween("09:00", "09:15")).toBe(0.25);
+    expect(hoursBetween("08:00", "17:00")).toBe(9);
+  });
+
+  it("wraps overnight when end is not after start", () => {
+    expect(hoursBetween("22:00", "01:00")).toBe(3);
+    expect(hoursBetween("23:30", "00:15")).toBe(0.75);
+    expect(hoursBetween("09:00", "09:00")).toBe(24);
+  });
+
+  it("rejects unparseable clocks and over-limit spans", () => {
+    expect(hoursBetween("", "10:00")).toBeNull();
+    expect(hoursBetween("25:00", "10:00")).toBeNull();
+    expect(hoursBetween("09:00", "99:99")).toBeNull();
+  });
+
+  it("adds hours onto a start clock, wrapping midnight", () => {
+    expect(addHoursToTime("09:00", 1.5)).toBe("10:30");
+    expect(addHoursToTime("09:00", 0.25)).toBe("09:15");
+    expect(addHoursToTime("22:00", 3)).toBe("01:00");
+    expect(addHoursToTime("23:45", 0.5)).toBe("00:15");
+  });
+
+  it("refuses hours the time entry table would refuse", () => {
+    expect(addHoursToTime("09:00", 0)).toBeNull();
+    expect(addHoursToTime("09:00", 25)).toBeNull();
+    expect(addHoursToTime("", 1)).toBeNull();
+    expect(addHoursToTime("bad", 1)).toBeNull();
   });
 });

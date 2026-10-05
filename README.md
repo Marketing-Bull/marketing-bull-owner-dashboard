@@ -704,9 +704,9 @@ Known and deliberate, roughly in the order they are worth fixing:
   Settings, with env/OpenClaw as fallback. Calendar still shells out to
   `~/.local/bin/gog`, so it remains tied to the machine where that account is
   configured.
-- Mileage entry currently accepts addresses and manual miles. Maps
-  autocomplete and automatic distance calculation remain a later integration;
-  recent-route prefill covers repeated trips without requiring a Maps key.
+- Mileage autocomplete and auto-distance use OpenRouteService. Set the API key
+  in **Settings → Mileage maps provider**. Without a key, manual miles and
+  recent-route prefill still work; maps never blocks saving a trip.
 - The imported source has no account mapping for 584 records (mostly the broad
   `Operating Expenses` category). They remain lossless with an unset account
   code and must be categorized before Schedule-C reports can be authoritative.
