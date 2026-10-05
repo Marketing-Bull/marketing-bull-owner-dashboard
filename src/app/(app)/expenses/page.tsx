@@ -19,6 +19,7 @@ import type {
   RecurringExpense,
   RecurringExpenseStatus
 } from "@/lib/types";
+import { accountCodeAfterCategoryChange, accountCodeForCategory, initialAccountCode, type CategoryAccountMap } from "@/lib/expense-category-accounts";
 
 import { annualizeExpense } from "@/lib/expense-annualize";
 
@@ -115,15 +116,17 @@ function queryString(filters: ExpenseFilters): string {
   return params.toString();
 }
 
-function blankExpense(defaults: ExpenseRecentDefaults | null, categories: string[], defaultCategory: string | null): ExpenseFormValues {
+function blankExpense(defaults: ExpenseRecentDefaults | null, categories: string[], defaultCategory: string | null, categoryAccounts: CategoryAccountMap = {}): ExpenseFormValues {
   // A Settings default outranks the last-used value; both must exist in the
   // list, or the picker would open on a value it cannot show.
   const known = (value: string | null | undefined) =>
     value && categories.some((category) => category.toLowerCase() === value.toLowerCase()) ? value : "";
-  return { date: todayKey(), amount: "", kind: "expense", vendor: "",
-    category: known(defaultCategory) || known(defaults?.category) || categories[0] || "",
+  const category = known(defaultCategory) || known(defaults?.category) || categories[0] || "";
+  return { date: todayKey(), amount: "", kind: "expense", vendor: "", category,
     paymentMethod: defaults?.paymentMethod || "", clientId: "", projectId: "", billable: false, reimbursable: false,
-    details: "", company: defaults?.company || "Marketing Bull", accountCode: defaults?.accountCode || "",
+    // The category's mapped account wins; the recent account only carries over
+    // when it was recorded with this same category.
+    details: "", company: defaults?.company || "Marketing Bull", accountCode: initialAccountCode(categoryAccounts, category, defaults),
     status: "", tags: "", recurring: "none", recurringDay: "" };
 }
 function expenseForm(entry: Expense, duplicate = false): ExpenseFormValues {
@@ -141,8 +144,8 @@ function blankRecurring(categories: string[], defaultCategory: string | null): R
 function recurringForm(entry: RecurringExpense): RecurringValues { return { description: entry.description, vendor: entry.vendor, amount: String(entry.amount), category: entry.category, company: entry.company, frequency: entry.frequency, dayOfMonth: entry.dayOfMonth == null ? "" : String(entry.dayOfMonth), startDate: entry.startDate, endDate: entry.endDate || "", status: entry.status, paymentMethod: entry.paymentMethod, notes: entry.notes }; }
 function recurringPayload(values: RecurringValues) { return { ...values, amount: Number(values.amount), dayOfMonth: values.dayOfMonth ? Number(values.dayOfMonth) : null, endDate: values.endDate || null }; }
 
-function ExpenseForm({ formId, initial, clients, projects, accounts, categories, existingReceipt, uploading, onDirtyChange, onSubmit }:
-  { formId: string; initial: ExpenseFormValues; clients: Client[]; projects: Project[]; accounts: ChartAccount[]; categories: string[]; existingReceipt?: string | null; uploading: boolean; onDirtyChange: (dirty: boolean) => void; onSubmit: (values: ExpenseFormValues, receipt: File | null, addAnother: boolean) => void }) {
+function ExpenseForm({ formId, initial, clients, projects, accounts, categories, categoryAccounts, existingReceipt, uploading, onDirtyChange, onSubmit }:
+  { formId: string; initial: ExpenseFormValues; clients: Client[]; projects: Project[]; accounts: ChartAccount[]; categories: string[]; categoryAccounts: CategoryAccountMap; existingReceipt?: string | null; uploading: boolean; onDirtyChange: (dirty: boolean) => void; onSubmit: (values: ExpenseFormValues, receipt: File | null, addAnother: boolean) => void }) {
   const [values, setValues] = useState(initial); const [receipt, setReceipt] = useState<File | null>(null);
   const dirty = JSON.stringify(values) !== JSON.stringify(initial) || receipt !== null;
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
@@ -152,6 +155,7 @@ function ExpenseForm({ formId, initial, clients, projects, accounts, categories,
   const categoryChoices = categories.some((category) => category.toLowerCase() === initial.category.toLowerCase()) || !initial.category
     ? categories
     : [initial.category, ...categories];
+  const mappedAccount = accountCodeForCategory(categoryAccounts, values.category);
   return <form id={formId} className={styles.sheetForm} onSubmit={(event) => {
     event.preventDefault(); const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
     onSubmit(values, receipt, submitter?.value === "another");
@@ -159,7 +163,7 @@ function ExpenseForm({ formId, initial, clients, projects, accounts, categories,
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Date</span><input className={styles.input} type="date" value={values.date} required onChange={(event) => setValues((current) => ({ ...current, date: event.target.value }))} /></label>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Amount</span><input className={styles.input} type="number" min="0.01" step="0.01" inputMode="decimal" value={values.amount} required autoFocus onChange={(event) => setValues((current) => ({ ...current, amount: event.target.value }))} /></label>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Vendor</span><input className={styles.input} value={values.vendor} placeholder="Who was paid?" onChange={(event) => setValues((current) => ({ ...current, vendor: event.target.value }))} /></label>
-    <label className={styles.sheetField}><span className={styles.fieldLabel}>Category</span><select className={styles.select} value={values.category} required onChange={(event) => setValues((current) => ({ ...current, category: event.target.value }))}>{values.category ? null : <option value="">Choose a category</option>}{categoryChoices.map((category) => <option key={category} value={category}>{category}</option>)}</select><span className={styles.receiptHint}>Managed in Settings → Expense categories.</span></label>
+    <label className={styles.sheetField}><span className={styles.fieldLabel}>Category</span><select className={styles.select} value={values.category} required onChange={(event) => { const category = event.target.value; setValues((current) => ({ ...current, category, accountCode: accountCodeAfterCategoryChange(categoryAccounts, current.category, category, current.accountCode) })); }}>{values.category ? null : <option value="">Choose a category</option>}{categoryChoices.map((category) => <option key={category} value={category}>{category}</option>)}</select><span className={styles.receiptHint}>Managed in Settings → Expense categories.{mappedAccount ? ` Account ${mappedAccount} fills in automatically.` : ""}</span></label>
     {values.kind === "income" ? <p className={`${styles.sheetSectionLabel} ${styles.spanAll}`}>Recorded as income · saving keeps it on the income side of the ledger</p> : null}
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Payment method</span><input className={styles.input} value={values.paymentMethod} placeholder="Card, ACH, cash…" onChange={(event) => setValues((current) => ({ ...current, paymentMethod: event.target.value }))} /></label>
     <label className={`${styles.sheetField} ${styles.spanAll}`}><span className={styles.fieldLabel}>Details</span><textarea className={styles.textarea} value={values.details} placeholder="What was this for?" onChange={(event) => setValues((current) => ({ ...current, details: event.target.value }))} /></label>
@@ -173,7 +177,7 @@ function ExpenseForm({ formId, initial, clients, projects, accounts, categories,
     <label className={styles.toggleField}><span>Reimbursable</span><input type="checkbox" checked={values.reimbursable} onChange={(event) => setValues((current) => ({ ...current, reimbursable: event.target.checked }))} /></label>
     <details className={styles.detailsDisclosure}><summary>More details</summary><div className={styles.detailsGrid}>
       <label className={styles.sheetField}><span className={styles.fieldLabel}>Company</span><input className={styles.input} value={values.company} onChange={(event) => setValues((current) => ({ ...current, company: event.target.value }))} /></label>
-      <label className={styles.sheetField}><span className={styles.fieldLabel}>Account code</span><select className={styles.select} value={values.accountCode} onChange={(event) => setValues((current) => ({ ...current, accountCode: event.target.value }))}><option value="">Unmapped</option>{accounts.map((account) => <option key={account.accountCode} value={account.accountCode}>{account.accountCode} · {account.category}</option>)}</select></label>
+      <label className={styles.sheetField}><span className={styles.fieldLabel}>Account code</span><select className={styles.select} value={values.accountCode} onChange={(event) => setValues((current) => ({ ...current, accountCode: event.target.value }))}><option value="">Unmapped</option>{accounts.map((account) => <option key={account.accountCode} value={account.accountCode}>{account.accountCode} · {account.category}</option>)}</select>{mappedAccount ? <span className={styles.receiptHint}>{values.accountCode === mappedAccount ? `From ${values.category} mapping — change to override.` : `Overridden · ${values.category} maps to ${mappedAccount}.`}</span> : null}</label>
       <label className={styles.sheetField}><span className={styles.fieldLabel}>Status</span><input className={styles.input} value={values.status} onChange={(event) => setValues((current) => ({ ...current, status: event.target.value }))} /></label>
       <label className={styles.sheetField}><span className={styles.fieldLabel}>Tags</span><input className={styles.input} value={values.tags} onChange={(event) => setValues((current) => ({ ...current, tags: event.target.value }))} /></label>
       <label className={styles.sheetField}><span className={styles.fieldLabel}>Recurring</span><select className={styles.select} value={values.recurring} onChange={(event) => setValues((current) => ({ ...current, recurring: event.target.value as ExpenseFrequency }))}><option value="none">One-time</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select></label>
@@ -213,6 +217,7 @@ export default function ExpensesPage() {
   const [facets, setFacets] = useState<ExpenseFacets>({ categories: [], companies: [], paymentMethods: [], statuses: [] });
   const [clients, setClients] = useState<Client[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [accounts, setAccounts] = useState<ChartAccount[]>([]);
   const [defaults, setDefaults] = useState<ExpenseRecentDefaults | null>(null); const [categoryOptions, setCategoryOptions] = useState<string[]>([]); const [defaultCategory, setDefaultCategory] = useState<string | null>(null);
+  const [categoryAccounts, setCategoryAccounts] = useState<CategoryAccountMap>({});
   const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false); const [error, setError] = useState<string | null>(null);
   const [sheetMode, setSheetMode] = useState<"create" | "edit" | null>(null); const [editingEntry, setEditingEntry] = useState<Expense | null>(null);
@@ -243,6 +248,7 @@ export default function ExpensesPage() {
     setFacets(json?.availableFacets ?? { categories: [], companies: [], paymentMethods: [], statuses: [] });
     setRecurring(Array.isArray(json?.recurringExpenses) ? json.recurringExpenses : []); setAccounts(Array.isArray(json?.accounts) ? json.accounts : []); setDefaults(json?.recentDefaults ?? null);
     setCategoryOptions(Array.isArray(json?.categoryOptions) ? json.categoryOptions : []); setDefaultCategory(typeof json?.defaultCategory === "string" ? json.defaultCategory : null);
+    setCategoryAccounts(json?.categoryAccounts && typeof json.categoryAccounts === "object" && !Array.isArray(json.categoryAccounts) ? json.categoryAccounts as CategoryAccountMap : {});
   } catch (caught) { if (caught instanceof DOMException && caught.name === "AbortError") return; setError(caught instanceof Error ? caught.message : String(caught)); }
   finally { if (!signal?.aborted) setLoading(false); } }, [ready, requestQuery]);
   useEffect(() => { const controller = new AbortController(); const timer = window.setTimeout(() => void loadEntries(controller.signal), 0); return () => { window.clearTimeout(timer); controller.abort(); }; }, [loadEntries]);
@@ -276,7 +282,7 @@ export default function ExpensesPage() {
     for (const [key, label] of labels) add(key, `${label}: ${filters[key]}`); return result;
   }, [filters, clientNames, projectNames, patchFilters]);
 
-  function openCreate(seed?: ExpenseFormValues) { setEditingEntry(null); setEditingRecurring(null); setPendingExpenseId(null); setFormSeed(seed ?? blankExpense(defaults, categoryOptions, defaultCategory)); setRecurringSeed(null); setFormKey((current) => current + 1); setFormDirty(false); setSheetMode("create"); }
+  function openCreate(seed?: ExpenseFormValues) { setEditingEntry(null); setEditingRecurring(null); setPendingExpenseId(null); setFormSeed(seed ?? blankExpense(defaults, categoryOptions, defaultCategory, categoryAccounts)); setRecurringSeed(null); setFormKey((current) => current + 1); setFormDirty(false); setSheetMode("create"); }
   function openEdit(entry: Expense) { setEditingEntry(entry); setEditingRecurring(null); setPendingExpenseId(null); setFormSeed(expenseForm(entry)); setRecurringSeed(null); setFormKey((current) => current + 1); setFormDirty(false); setSheetMode("edit"); }
   function openRecurringCreate() { setEditingEntry(null); setEditingRecurring(null); setPendingExpenseId(null); setRecurringSeed(blankRecurring(categoryOptions, defaultCategory)); setFormSeed(null); setFormKey((current) => current + 1); setFormDirty(false); setSheetMode("create"); }
   function openRecurringEdit(entry: RecurringExpense) { setEditingEntry(null); setEditingRecurring(entry); setPendingExpenseId(null); setRecurringSeed(recurringForm(entry)); setFormSeed(null); setFormKey((current) => current + 1); setFormDirty(false); setSheetMode("edit"); }
@@ -326,7 +332,7 @@ export default function ExpensesPage() {
     </> : <section className={styles.ledgerSurface}>{recurring.length === 0 ? <div className={styles.emptyState}><div><h2>No recurring definitions yet</h2><p>Create reusable recurring expense definitions without mixing them into the transaction ledger.</p><button type="button" className={styles.primaryButton} onClick={openRecurringCreate}><Plus size={15} /> Add recurring</button></div></div> : <div className={styles.mobileRows} style={{ display: "flex", flexDirection: "column" }}>{recurring.map((item) => <article key={item.id} className={styles.mobileRow}><div className={styles.mobileRowHead}><div><div className={styles.mobileRowTitle}>{item.description}</div><p className={styles.mobileRowDetails}>{item.vendor || item.category} · {money(item.amount)} {item.frequency} · {money(item.annualizedAmount)}/year</p></div><div className={styles.rowActions}><span className={`${styles.status} ${item.status === "active" ? styles.statusActive : ""}`}>{item.status}</span><button type="button" className={styles.iconButton} onClick={() => openRecurringEdit(item)} aria-label="Edit recurring expense"><Pencil size={15} /></button><button type="button" className={styles.iconButton} onClick={() => setDeleteRecurring(item)} aria-label="Delete recurring expense"><Trash2 size={15} /></button></div></div></article>)}</div>}</section>}
 
     <RecordSheet open={sheetMode !== null} title={tab === "recurring" ? (sheetMode === "edit" ? "Edit recurring expense" : "Add recurring expense") : (sheetMode === "edit" ? "Edit expense" : "Add expense")} subtitle={tab === "entries" && sheetMode === "create" && defaults ? "Using recent category, company, account, and payment values" : undefined} dirty={formDirty} onClose={() => setSheetMode(null)} footer={<>{tab === "entries" && sheetMode === "create" ? <button type="submit" form={formId} name="intent" value="another" className={styles.secondaryButton} disabled={busy || uploading}>Save & add another</button> : null}<button type="submit" form={formId} name="intent" value="close" className={styles.primaryButton} disabled={busy || uploading}>{uploading ? "Uploading receipt…" : busy ? "Saving…" : tab === "recurring" ? (sheetMode === "edit" ? "Save changes" : "Save recurring") : (sheetMode === "edit" ? "Save changes" : "Save expense")}</button></>}>
-      {tab === "entries" && formSeed ? <ExpenseForm key={formKey} formId={formId} initial={formSeed} clients={clients} projects={projects} accounts={accounts} categories={categoryOptions} existingReceipt={editingEntry?.receiptName} uploading={uploading} onDirtyChange={setFormDirty} onSubmit={async (values, receipt, addAnother) => {
+      {tab === "entries" && formSeed ? <ExpenseForm key={formKey} formId={formId} initial={formSeed} clients={clients} projects={projects} accounts={accounts} categories={categoryOptions} categoryAccounts={categoryAccounts} existingReceipt={editingEntry?.receiptName} uploading={uploading} onDirtyChange={setFormDirty} onSubmit={async (values, receipt, addAnother) => {
         const existingId = editingEntry?.id || pendingExpenseId; const method = existingId ? "PUT" : "POST"; const path = existingId ? `/api/expenses/${existingId}` : "/api/expenses";
         const result = await mutate(method, path, expensePayload(values)); if (!result.success) return; const expenseId = existingId || result.expenseId;
         if (!editingEntry && expenseId) setPendingExpenseId(expenseId);

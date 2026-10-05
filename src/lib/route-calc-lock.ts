@@ -13,6 +13,12 @@ export type RouteCalcLock = {
   succeed(key: string, ...aliases: string[]): void;
   /** Unlock so the pair can be retried after a failed calculation. */
   fail(key: string): void;
+  /**
+   * Forget every pair. Used when the user edits an address: whatever pair the
+   * fields settle on next (including the one the form opened on) is routed
+   * once more instead of being treated as already calculated.
+   */
+  clear(): void;
 };
 
 export function createRouteCalcLock(seed: Iterable<string> = []): RouteCalcLock {
@@ -32,6 +38,9 @@ export function createRouteCalcLock(seed: Iterable<string> = []): RouteCalcLock 
     },
     fail(key) {
       keys.delete(key);
+    },
+    clear() {
+      keys.clear();
     }
   };
 }
