@@ -78,7 +78,7 @@ const SECTIONS: NavSection[] = [
       // FIXME: both are hardcoded Tailscale addresses — dead links off the
       // tailnet. Same standing note as before the shell; move to env when
       // this stops being a single-owner app on one machine.
-      { href: "http://100.119.59.63:3333/tasks", label: "Tasks (ClickUp)", icon: <ListTodo size={16} />, external: true },
+      { href: "http://100.119.59.63:3333/tasks", label: "ClickUp board", icon: <ListTodo size={16} />, external: true },
       { href: "http://100.82.222.18:9119/chat", label: "Hermes", icon: <MessageSquare size={16} />, external: true }
     ]
   }

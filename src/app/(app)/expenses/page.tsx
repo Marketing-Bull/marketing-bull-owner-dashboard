@@ -21,6 +21,8 @@ import type {
 } from "@/lib/types";
 import { accountCodeAfterCategoryChange, accountCodeForCategory, initialAccountCode, type CategoryAccountMap } from "@/lib/expense-category-accounts";
 
+import { annualizeExpense } from "@/lib/expense-annualize";
+
 type Direction = "asc" | "desc";
 type ExpenseSort = "date" | "amount" | "kind" | "category" | "company" | "vendor" | "details" | "accountCode" | "billable" | "reimbursable" | "recurring" | "paymentMethod" | "status" | "annualizedAmount" | "createdAt" | "updatedAt";
 type Tab = "entries" | "recurring";
@@ -188,10 +190,13 @@ function RecurringForm({ formId, initial, categories, onDirtyChange, onSubmit }:
   const [values, setValues] = useState(initial); const dirty = JSON.stringify(values) !== JSON.stringify(initial);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const categoryChoices = !initial.category || categories.some((category) => category.toLowerCase() === initial.category.toLowerCase()) ? categories : [initial.category, ...categories];
+  const amount = Number(values.amount);
+  const annualized = Number.isFinite(amount) && amount > 0 ? annualizeExpense(amount, values.frequency) : null;
   return <form id={formId} className={styles.sheetForm} onSubmit={(event) => { event.preventDefault(); onSubmit(values); }}>
     <label className={`${styles.sheetField} ${styles.spanAll}`}><span className={styles.fieldLabel}>Description</span><input className={styles.input} value={values.description} required autoFocus onChange={(event) => setValues((current) => ({ ...current, description: event.target.value }))} /></label>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Amount</span><input className={styles.input} type="number" min="0.01" step="0.01" inputMode="decimal" value={values.amount} required onChange={(event) => setValues((current) => ({ ...current, amount: event.target.value }))} /></label>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Frequency</span><select className={styles.select} value={values.frequency} onChange={(event) => setValues((current) => ({ ...current, frequency: event.target.value as RecurringValues["frequency"] }))}><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select></label>
+    <div className={styles.calculation} aria-label="Annualized expense preview"><div><strong>{Number.isFinite(amount) && amount > 0 ? money(amount) : "—"}</strong><span>Per {values.frequency === "weekly" ? "week" : values.frequency === "monthly" ? "month" : values.frequency === "quarterly" ? "quarter" : "year"}</span></div><div><strong>{annualized == null ? "—" : `${money(annualized)}/year`}</strong><span>Annualized</span></div></div>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Vendor</span><input className={styles.input} value={values.vendor} onChange={(event) => setValues((current) => ({ ...current, vendor: event.target.value }))} /></label>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Category</span><select className={styles.select} value={values.category} required onChange={(event) => setValues((current) => ({ ...current, category: event.target.value }))}>{values.category ? null : <option value="">Choose a category</option>}{categoryChoices.map((category) => <option key={category} value={category}>{category}</option>)}</select></label>
     <label className={styles.sheetField}><span className={styles.fieldLabel}>Starts</span><input className={styles.input} type="date" value={values.startDate} required onChange={(event) => setValues((current) => ({ ...current, startDate: event.target.value }))} /></label>

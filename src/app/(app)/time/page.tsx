@@ -271,6 +271,40 @@ function TimeForm({
         }}
       />
       <label className={styles.sheetField}>
+        <span className={styles.fieldLabel}>Start time</span>
+        <input className={styles.input} type="time" value={values.startTime} onChange={(event) => {
+          const startTime = event.target.value;
+          setValues((current) => {
+            const updated = { ...current, startTime };
+            if (startTime && updated.endTime) {
+              const between = hoursBetween(startTime, updated.endTime);
+              if (between !== null) updated.hours = formatHours(between);
+            }
+            return updated;
+          });
+        }} />
+      </label>
+      <label className={styles.sheetField}>
+        <span className={styles.fieldLabel}>End time</span>
+        <input className={styles.input} type="time" value={values.endTime} onChange={(event) => {
+          const endTime = event.target.value;
+          setValues((current) => {
+            const updated = { ...current, endTime };
+            if (updated.startTime && endTime) {
+              const between = hoursBetween(updated.startTime, endTime);
+              if (between !== null) updated.hours = formatHours(between);
+            }
+            return updated;
+          });
+        }} />
+      </label>
+      {overnight ? (
+        <p className={`${styles.addressHint} ${styles.spanAll}`} role="status">
+          Overnight (+24h): end is at or before start, so this span runs through midnight{overnightHours === null ? "" : ` — ${formatHours(overnightHours)} hrs`}.
+        </p>
+      ) : null}
+      <p className={`${styles.addressHint} ${styles.spanAll}`}>When both start and end are set, Hours updates to match. Changing Hours with a start time updates end.</p>
+      <label className={styles.sheetField}>
         <span className={styles.fieldLabel}>Client</span>
         <select className={styles.select} value={values.clientId} onChange={(event) => {
           const clientId = event.target.value;
@@ -306,45 +340,6 @@ function TimeForm({
         <div><strong>{money(rate)}/hr</strong><span>{frozenRate === undefined ? "Rate at save" : "Frozen rate"}</span></div>
         <div><strong>Estimated {money(estimated)}</strong><span>{(hours ?? 0).toFixed(2)} hrs × {money(rate)}</span></div>
       </div>
-      <details className={styles.detailsDisclosure}>
-        <summary>More details</summary>
-        <div className={styles.detailsGrid}>
-          <label className={styles.sheetField}>
-            <span className={styles.fieldLabel}>Start time</span>
-            <input className={styles.input} type="time" value={values.startTime} onChange={(event) => {
-              const startTime = event.target.value;
-              setValues((current) => {
-                const updated = { ...current, startTime };
-                if (startTime && updated.endTime) {
-                  const between = hoursBetween(startTime, updated.endTime);
-                  if (between !== null) updated.hours = formatHours(between);
-                }
-                return updated;
-              });
-            }} />
-          </label>
-          <label className={styles.sheetField}>
-            <span className={styles.fieldLabel}>End time</span>
-            <input className={styles.input} type="time" value={values.endTime} onChange={(event) => {
-              const endTime = event.target.value;
-              setValues((current) => {
-                const updated = { ...current, endTime };
-                if (updated.startTime && endTime) {
-                  const between = hoursBetween(updated.startTime, endTime);
-                  if (between !== null) updated.hours = formatHours(between);
-                }
-                return updated;
-              });
-            }} />
-          </label>
-          {overnight ? (
-            <p className={`${styles.addressHint} ${styles.spanAll}`} role="status">
-              Overnight (+24h): end is at or before start, so this span runs through midnight{overnightHours === null ? "" : ` — ${formatHours(overnightHours)} hrs`}.
-            </p>
-          ) : null}
-          <p className={`${styles.addressHint} ${styles.spanAll}`}>When both start and end are set, Hours updates to match. Changing Hours with a start time updates end.</p>
-        </div>
-      </details>
     </form>
   );
 }

@@ -155,7 +155,7 @@ function ClientForm({
       </label>
       <label className={styles.field}>
         <span className={styles.label}>Paid through</span>
-        <input className={styles.input} placeholder="YYYY-MM-DD" value={values.paidThroughDate} onChange={set("paidThroughDate")} />
+        <input className={styles.input} type="date" value={values.paidThroughDate} onChange={set("paidThroughDate")} />
       </label>
       <label className={styles.field}>
         <span className={styles.label}>Invoice status</span>

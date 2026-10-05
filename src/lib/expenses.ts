@@ -36,6 +36,9 @@ import {
   type RecurringExpenseStatus
 } from "@/lib/types";
 
+import { annualizeExpense } from "@/lib/expense-annualize";
+export { annualizeExpense };
+
 type Row = Record<string, unknown>;
 
 export class ExpenseValidationError extends Error {}
@@ -233,11 +236,6 @@ export function isExpenseFrequency(value: unknown): value is ExpenseFrequency {
 
 export function isRecurringExpenseStatus(value: unknown): value is RecurringExpenseStatus {
   return typeof value === "string" && (RECURRING_EXPENSE_STATUSES as readonly string[]).includes(value);
-}
-
-export function annualizeExpense(amount: number, frequency: ExpenseFrequency): number | null {
-  const factor = frequency === "weekly" ? 52 : frequency === "monthly" ? 12 : frequency === "quarterly" ? 4 : frequency === "yearly" ? 1 : null;
-  return factor == null ? null : Number((amount * factor).toFixed(2));
 }
 
 function validateAmount(value: unknown, allowZero = false): number {
