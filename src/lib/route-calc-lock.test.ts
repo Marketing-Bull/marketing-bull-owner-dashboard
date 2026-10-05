@@ -20,4 +20,15 @@ describe("route calc lock", () => {
     expect(lock.has("a|b")).toBe(false);
     expect(lock.has("A Normalized|B Normalized")).toBe(true);
   });
+
+  it("clear forgets every pair, including the seeded one", () => {
+    const lock = createRouteCalcLock(["seed|pair"]);
+    lock.succeed("a|b", "A|B");
+    lock.clear();
+    expect(lock.has("seed|pair")).toBe(false);
+    expect(lock.has("a|b")).toBe(false);
+    expect(lock.has("A|B")).toBe(false);
+    expect(lock.begin("seed|pair")).toBe(true);
+    expect(lock.begin("seed|pair")).toBe(false);
+  });
 });

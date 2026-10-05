@@ -4,6 +4,7 @@ import {
   describeHours,
   formatHours,
   hoursBetween,
+  isOvernightSpan,
   parseHoursInput,
   presetLabel,
   stepHours
@@ -94,5 +95,22 @@ describe("hoursBetween / addHoursToTime", () => {
     expect(addHoursToTime("09:00", 25)).toBeNull();
     expect(addHoursToTime("", 1)).toBeNull();
     expect(addHoursToTime("bad", 1)).toBeNull();
+  });
+});
+
+describe("isOvernightSpan", () => {
+  it("matches hoursBetween's wrap rule", () => {
+    expect(isOvernightSpan("22:00", "01:00")).toBe(true);
+    expect(hoursBetween("22:00", "01:00")).toBe(3);
+    expect(isOvernightSpan("09:00", "09:00")).toBe(true);
+    expect(hoursBetween("09:00", "09:00")).toBe(24);
+    expect(isOvernightSpan("09:00", "17:00")).toBe(false);
+    expect(isOvernightSpan("23:59", "00:00")).toBe(true);
+  });
+
+  it("is false for missing or unparseable clocks", () => {
+    expect(isOvernightSpan("", "01:00")).toBe(false);
+    expect(isOvernightSpan("22:00", "")).toBe(false);
+    expect(isOvernightSpan("25:00", "01:00")).toBe(false);
   });
 });

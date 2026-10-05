@@ -125,6 +125,19 @@ export function hoursBetween(startHHmm: string, endHHmm: string): number | null 
 }
 
 /**
+ * True when a start/end pair is read as crossing midnight — the same rule
+ * `hoursBetween` uses (end not after start wraps +24h). The Time form shows
+ * this so a span like 22:00 → 01:00 is visibly overnight, not a typo that
+ * quietly became 3 (or, for equal clocks, 24) hours.
+ */
+export function isOvernightSpan(startHHmm: string, endHHmm: string): boolean {
+  const start = minutesFromHHmm(startHHmm);
+  const end = minutesFromHHmm(endHHmm);
+  if (start === null || end === null) return false;
+  return end <= start;
+}
+
+/**
  * End clock time after adding decimal hours to a start time. Wraps past midnight.
  * Returns null when start or hours cannot be settled.
  */
