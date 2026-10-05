@@ -344,6 +344,9 @@ function mapMcExpense(
     accountCode,
     billable: Boolean(row.is_billable),
     reimbursable: Boolean(row.is_reimbursable),
+    // Imported ledger history is already settled — not accounts payable.
+    paid: true,
+    paidOn: date,
     recurring: rawRecurring === "none" && recurringFrequency ? recurringFrequency : rawRecurring,
     recurringDay: num(row.recurring_day),
     paymentMethod: str(row.payment_method),
