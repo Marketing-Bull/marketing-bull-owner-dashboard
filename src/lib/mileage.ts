@@ -5,6 +5,7 @@ import { getClient, getProject, newEntityId } from "@/lib/entities";
 import { isDateKey } from "@/lib/time-entries";
 import {
   addInFilter,
+  addLocalDateRange,
   addLikeFilter,
   assertRange,
   booleanParam,
@@ -119,6 +120,12 @@ function nowIso(): string { return new Date().toISOString(); }
 function text(value: unknown): string { return typeof value === "string" ? value.trim() : ""; }
 
 function finiteNumber(value: unknown, label: string): number {
+  if (
+    typeof value !== "number" &&
+    (typeof value !== "string" || !/^-?\d+(?:\.\d+)?$/.test(value.trim()))
+  ) {
+    throw new MileageValidationError(`${label} must be a number.`);
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) throw new MileageValidationError(`${label} must be a number.`);
   return parsed;
@@ -168,7 +175,7 @@ function rowToMileage(row: Row): MileageEntry {
     projectId: row.project_id == null ? null : String(row.project_id),
     tripName: text(row.trip_name), date: String(row.date), startAddress: text(row.start_address),
     endAddress: text(row.end_address), purpose: text(row.purpose), miles: Number(row.miles),
-    roundTrip: Boolean(row.round_trip), totalMiles: Number(row.total_miles), rate: Number(row.rate),
+    roundTrip: Boolean(row.round_trip), totalMiles: Number(row.total_miles), rate: Number(row.rate ?? DEFAULT_MILEAGE_RATE),
     billable: Boolean(row.billable),
     notes: typeof row.notes === "string" ? row.notes : "",
     calculationSource: row.calculation_source === "provider" ? "provider" : "manual",
@@ -193,6 +200,19 @@ function validated(
   const totalMiles = mileageTotal(input.miles, roundTrip);
   if (input.billable !== undefined && typeof input.billable !== "boolean") {
     throw new MileageValidationError("Billable must be true or false.");
+  }
+  if (input.roundTrip !== undefined && typeof input.roundTrip !== "boolean") {
+    throw new MileageValidationError("Round trip must be true or false.");
+  }
+  if (input.routeMetadataJson !== undefined && input.routeMetadataJson !== null) {
+    if (typeof input.routeMetadataJson !== "string") {
+      throw new MileageValidationError("Route metadata must be a JSON string.");
+    }
+    try {
+      JSON.parse(input.routeMetadataJson);
+    } catch {
+      throw new MileageValidationError("Route metadata must be valid JSON.");
+    }
   }
   return { date, miles: finiteNumber(input.miles, "Miles"), roundTrip, totalMiles,
     ...resolveRelations(db, input.clientId, input.projectId, existing) };
@@ -282,7 +302,6 @@ function mileageWhere(query: MileageQuery): { where: string; params: QueryScalar
     clauses.push(`${column} <= ?`);
     params.push(value);
   };
-
   exact("id", query.id);
   exact("mc_id", query.mcId);
   minimum("date", query.from);
@@ -308,10 +327,8 @@ function mileageWhere(query: MileageQuery): { where: string; params: QueryScalar
     "trip_name || ' ' || start_address || ' ' || end_address || ' ' || purpose || ' ' || notes",
     query.search
   );
-  minimum("SUBSTR(created_at, 1, 10)", query.createdFrom);
-  maximum("SUBSTR(created_at, 1, 10)", query.createdTo);
-  minimum("SUBSTR(updated_at, 1, 10)", query.updatedFrom);
-  maximum("SUBSTR(updated_at, 1, 10)", query.updatedTo);
+  addLocalDateRange(clauses, params, "created_at", query.createdFrom, query.createdTo);
+  addLocalDateRange(clauses, params, "updated_at", query.updatedFrom, query.updatedTo);
   return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
 
@@ -442,7 +459,7 @@ export function getMileageRate(db: DatabaseSync): number {
 
 export function setMileageRate(db: DatabaseSync, value: unknown): number {
   const rate = finiteNumber(value, "Mileage rate");
-  if (rate < 0 || rate > 10) throw new MileageValidationError("Mileage rate must be between 0 and 10 dollars per mile.");
+  if (rate <= 0 || rate > 5) throw new MileageValidationError("Mileage rate must be greater than 0 and no more than 5 dollars per mile.");
   db.prepare(`INSERT INTO app_settings (key,value,updated_at) VALUES (?,?,?)
     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`
   ).run(MILEAGE_RATE_KEY,String(rate),nowIso());

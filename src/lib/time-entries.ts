@@ -7,6 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { getClient, getProject, newEntityId, resolveHourlyRate } from "@/lib/entities";
 import {
   addInFilter,
+  addLocalDateRange,
   addLikeFilter,
   assertRange,
   booleanParam,
@@ -107,13 +108,16 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function text(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+function nullableTime(value: unknown, label: string): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+    throw new TimeEntryValidationError(`${label} must use HH:MM.`);
+  }
+  return value;
 }
 
-function nullableText(value: unknown): string | null {
-  const valueText = text(value);
-  return valueText || null;
+function text(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function relationId(value: unknown, label: string): string | null {
@@ -125,6 +129,12 @@ function relationId(value: unknown, label: string): string | null {
 }
 
 function finiteNumber(value: unknown, label: string): number {
+  if (
+    typeof value !== "number" &&
+    (typeof value !== "string" || !/^-?\d+(?:\.\d+)?$/.test(value.trim()))
+  ) {
+    throw new TimeEntryValidationError(`${label} must be a number.`);
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) {
     throw new TimeEntryValidationError(`${label} must be a number.`);
@@ -305,8 +315,8 @@ function timeEntryWhere(query: TimeEntryQuery): { where: string; params: QuerySc
   maximum("hours", query.hoursMax);
   minimum("rate", query.rateMin);
   maximum("rate", query.rateMax);
-  minimum("(hours * rate)", query.amountMin);
-  maximum("(hours * rate)", query.amountMax);
+  minimum("ROUND(hours * rate, 2)", query.amountMin);
+  maximum("ROUND(hours * rate, 2)", query.amountMax);
   addLikeFilter(clauses, params, "details", query.details);
   addLikeFilter(
     clauses,
@@ -322,10 +332,8 @@ function timeEntryWhere(query: TimeEntryQuery): { where: string; params: QuerySc
   if (query.hasEndTime !== undefined) {
     clauses.push(query.hasEndTime ? "end_time IS NOT NULL AND end_time <> ''" : "(end_time IS NULL OR end_time = '')");
   }
-  minimum("SUBSTR(created_at, 1, 10)", query.createdFrom);
-  maximum("SUBSTR(created_at, 1, 10)", query.createdTo);
-  minimum("SUBSTR(updated_at, 1, 10)", query.updatedFrom);
-  maximum("SUBSTR(updated_at, 1, 10)", query.updatedTo);
+  addLocalDateRange(clauses, params, "created_at", query.createdFrom, query.createdTo);
+  addLocalDateRange(clauses, params, "updated_at", query.updatedFrom, query.updatedTo);
   return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
 
@@ -339,7 +347,7 @@ export function queryTimeEntries(
     date: "date",
     hours: "hours",
     rate: "rate",
-    amount: "(hours * rate)",
+    amount: "ROUND(hours * rate, 2)",
     details: "details COLLATE NOCASE",
     billable: "billable",
     startTime: "start_time",
@@ -361,8 +369,8 @@ export function queryTimeEntries(
       SELECT
         COALESCE(SUM(hours), 0) AS hours,
         COALESCE(SUM(CASE WHEN billable = 1 THEN hours ELSE 0 END), 0) AS billable_hours,
-        COALESCE(SUM(hours * rate), 0) AS amount,
-        COALESCE(SUM(CASE WHEN billable = 1 THEN hours * rate ELSE 0 END), 0) AS billable_amount
+        COALESCE(SUM(ROUND(hours * rate, 2)), 0) AS amount,
+        COALESCE(SUM(CASE WHEN billable = 1 THEN ROUND(hours * rate, 2) ELSE 0 END), 0) AS billable_amount
       FROM time_entries ${where}
     `)
     .get(...params) as Record<string, number>;
@@ -421,8 +429,8 @@ export function createTimeEntry(db: DatabaseSync, input: TimeEntryInput): TimeEn
     rate,
     input.billable === false ? 0 : 1,
     typeof input.details === "string" ? input.details.trim() : "",
-    nullableText(input.startTime),
-    nullableText(input.endTime),
+    nullableTime(input.startTime, "Start time"),
+    nullableTime(input.endTime, "End time"),
     input.createdAt ?? now,
     now
   );
@@ -476,8 +484,8 @@ export function updateTimeEntry(
     rate,
     patch.billable === undefined ? (existing.billable ? 1 : 0) : (patch.billable ? 1 : 0),
     patch.details === undefined ? existing.details : text(patch.details),
-    patch.startTime === undefined ? existing.startTime : nullableText(patch.startTime),
-    patch.endTime === undefined ? existing.endTime : nullableText(patch.endTime),
+    patch.startTime === undefined ? existing.startTime : nullableTime(patch.startTime, "Start time"),
+    patch.endTime === undefined ? existing.endTime : nullableTime(patch.endTime, "End time"),
     nowIso(),
     id
   );
@@ -509,34 +517,76 @@ function localDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function hoursByProject(db: DatabaseSync, from: string, to: string): HoursEntry[] {
+export function resolveLocalToday(value: unknown, serverToday: string): string {
+  if (!isDateKey(value) || !isDateKey(serverToday)) return serverToday;
+  const difference = Math.abs(
+    Date.parse(`${value}T00:00:00Z`) - Date.parse(`${serverToday}T00:00:00Z`)
+  ) / 86_400_000;
+  return difference <= 1 ? value : serverToday;
+}
+
+function shiftDateKey(value: string, days: number): string {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function hoursByProject(db: DatabaseSync, from: string, to: string): { entries: HoursEntry[]; totalHours: number } {
   const rows = db.prepare(`
-    SELECT
-      COALESCE(p.name, c.name, 'Unassigned') AS label,
-      SUM(te.hours) AS hours
-    FROM time_entries te
-    LEFT JOIN projects p ON p.id = te.project_id
-    LEFT JOIN clients c ON c.id = te.client_id
-    WHERE te.date >= ? AND te.date <= ?
-    GROUP BY COALESCE(p.name, c.name, 'Unassigned')
-    ORDER BY hours DESC, label COLLATE NOCASE
+    WITH grouped AS (
+      SELECT
+        CASE
+          WHEN te.project_id IS NOT NULL THEN 'project:' || te.project_id
+          WHEN te.client_id IS NOT NULL THEN 'client:' || te.client_id
+          ELSE 'unassigned'
+        END AS group_id,
+        COALESCE(p.name, c.name, 'No project') AS name,
+        COALESCE(c.name, '') AS client_name,
+        SUM(te.hours) AS hours
+      FROM time_entries te
+      LEFT JOIN projects p ON p.id = te.project_id
+      LEFT JOIN clients c ON c.id = te.client_id
+      WHERE te.date >= ? AND te.date <= ?
+      GROUP BY
+        group_id,
+        COALESCE(p.name, c.name, 'No project'),
+        COALESCE(c.name, '')
+    )
+    SELECT name, client_name, hours, COUNT(*) OVER (PARTITION BY name) AS same_name_count
+    FROM grouped
+    ORDER BY hours DESC, name COLLATE NOCASE, client_name COLLATE NOCASE
     LIMIT 6
-  `).all(from, to) as Array<{ label: string; hours: number }>;
-  return rows.map((row) => ({ label: row.label, hours: Number(Number(row.hours).toFixed(1)) }));
+  `).all(from, to) as Array<{ name: string; client_name: string; hours: number; same_name_count: number }>;
+  const total = db.prepare(
+    "SELECT COALESCE(SUM(hours), 0) AS total FROM time_entries WHERE date >= ? AND date <= ?"
+  ).get(from, to) as { total: number };
+  return {
+    entries: rows.map((row) => ({
+      label: Number(row.same_name_count) > 1 && row.client_name
+        ? `${row.name} · ${row.client_name}`
+        : row.name,
+      hours: Number(Number(row.hours).toFixed(1))
+    })),
+    totalHours: Number(Number(total.total).toFixed(1))
+  };
 }
 
 export function buildLocalHoursWindows(
   db: DatabaseSync,
-  now: Date = new Date()
-): { day: HoursEntry[]; week: HoursEntry[]; month: HoursEntry[] } {
-  const today = localDateKey(now);
-  const weekStart = new Date(now);
-  const weekday = weekStart.getDay();
-  weekStart.setDate(weekStart.getDate() + (weekday === 0 ? -6 : 1 - weekday));
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  nowOrOptions: Date | { today?: unknown } = new Date()
+): { day: ReturnType<typeof hoursByProject>; week: ReturnType<typeof hoursByProject>; month: ReturnType<typeof hoursByProject> } {
+  const now = nowOrOptions instanceof Date ? nowOrOptions : new Date();
+  const today = nowOrOptions instanceof Date
+    ? localDateKey(nowOrOptions)
+    : isDateKey(nowOrOptions.today)
+      ? nowOrOptions.today
+      : localDateKey(now);
+  const [year, month, day] = today.split("-").map(Number);
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  const weekStart = shiftDateKey(today, weekday === 0 ? -6 : 1 - weekday);
+  const monthStart = `${today.slice(0, 7)}-01`;
   return {
     day: hoursByProject(db, today, today),
-    week: hoursByProject(db, localDateKey(weekStart), today),
-    month: hoursByProject(db, localDateKey(monthStart), today)
+    week: hoursByProject(db, weekStart, today),
+    month: hoursByProject(db, monthStart, today)
   };
 }

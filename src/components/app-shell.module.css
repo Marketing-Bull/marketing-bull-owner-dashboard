@@ -124,12 +124,15 @@
 @media (max-width: 860px) {
   .sidebar {
     transform: translateX(-100%);
-    transition: transform 160ms ease;
+    visibility: hidden;
+    transition: transform 160ms ease, visibility 0s linear 160ms;
     box-shadow: none;
   }
 
   .sidebarOpen {
     transform: translateX(0);
+    visibility: visible;
+    transition: transform 160ms ease;
     box-shadow: var(--shadow);
   }
 

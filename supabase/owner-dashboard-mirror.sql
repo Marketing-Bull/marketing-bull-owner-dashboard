@@ -123,6 +123,11 @@ create table if not exists owner_dashboard.expenses (
   synced_at timestamptz not null default now()
 );
 
+alter table owner_dashboard.expenses
+  add column if not exists paid boolean not null default true;
+alter table owner_dashboard.expenses
+  add column if not exists paid_on text;
+
 create table if not exists owner_dashboard.recurring_expenses (
   id text primary key,
   mc_id bigint,
@@ -159,7 +164,7 @@ create table if not exists owner_dashboard.mileage_entries (
   miles numeric,
   round_trip boolean,
   total_miles numeric,
-  rate numeric,
+  rate numeric not null default 0.67,
   billable boolean,
   notes text,
   calculation_source text,
@@ -174,8 +179,8 @@ create table if not exists owner_dashboard.mileage_entries (
   synced_at timestamptz not null default now()
 );
 
--- Added after the first apply; `create table if not exists` won't add it.
-alter table owner_dashboard.mileage_entries add column if not exists rate numeric;
+alter table owner_dashboard.mileage_entries
+  add column if not exists rate numeric not null default 0.67;
 
 -- Accounting reference ------------------------------------------------------
 
@@ -198,6 +203,20 @@ create table if not exists owner_dashboard.expense_category_accounts (
   account_code text,
   created_at text,
   updated_at text,
+  synced_at timestamptz not null default now()
+);
+
+create table if not exists owner_dashboard.dropdown_options (
+  id text primary key,
+  list_key text not null,
+  label text not null,
+  normalized_label text not null,
+  sort_order integer not null default 0,
+  is_active boolean not null default true,
+  is_default boolean not null default false,
+  metadata_json text not null default '{}',
+  created_at text not null,
+  updated_at text not null,
   synced_at timestamptz not null default now()
 );
 
@@ -295,6 +314,7 @@ alter table owner_dashboard.recurring_expenses        enable row level security;
 alter table owner_dashboard.mileage_entries           enable row level security;
 alter table owner_dashboard.chart_accounts            enable row level security;
 alter table owner_dashboard.expense_category_accounts enable row level security;
+alter table owner_dashboard.dropdown_options        enable row level security;
 alter table owner_dashboard.dashboard_state           enable row level security;
 alter table owner_dashboard.daily_history             enable row level security;
 alter table owner_dashboard.phone_calls               enable row level security;

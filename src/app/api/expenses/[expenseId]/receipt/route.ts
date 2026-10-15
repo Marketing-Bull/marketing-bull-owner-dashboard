@@ -2,7 +2,7 @@ import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { NextResponse } from "next/server";
 import { getDatabase, getDatabasePath } from "@/lib/dashboard-state";
-import { ExpenseValidationError, getExpense, setExpenseReceipt } from "@/lib/expenses";
+import { ExpenseValidationError, getExpense, receiptContentDisposition, setExpenseReceipt } from "@/lib/expenses";
 
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ expenseId: string }> };
@@ -18,7 +18,7 @@ export async function GET(_request: Request, context: Context) {
     const bytes = await readFile(receiptFile(expense.receiptPath));
     const extension = extname(expense.receiptPath).toLowerCase();
     const contentType = extension === ".pdf" ? "application/pdf" : extension === ".png" ? "image/png" : extension === ".webp" ? "image/webp" : "image/jpeg";
-    return new Response(bytes, { headers: { "Content-Type": contentType, "Content-Disposition": `inline; filename="${(expense.receiptName || "receipt").replace(/[\r\n"\\]/g, "")}"`, "Cache-Control": "private, no-store" } });
+    return new Response(bytes, { headers: { "Content-Type": contentType, "Content-Disposition": receiptContentDisposition(expense.receiptName || "receipt"), "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff" } });
   } catch {
     return NextResponse.json({ error: "Receipt file is missing." }, { status: 404 });
   }
@@ -30,7 +30,17 @@ export async function POST(request: Request, context: Context) {
   const existing = getExpense(db, expenseId);
   if (!existing) return NextResponse.json({ error: "No such expense." }, { status: 404 });
   try {
-    const form = await request.formData();
+    const maxBodySize = 10 * 1024 * 1024 + 64 * 1024;
+    const contentLength = Number(request.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > maxBodySize) {
+      throw new ExpenseValidationError("Receipt must be between 1 byte and 10 MB.");
+    }
+    let form: FormData;
+    try {
+      form = await request.formData();
+    } catch {
+      throw new ExpenseValidationError("Receipt must be between 1 byte and 10 MB.");
+    }
     const receipt = form.get("receipt");
     if (!(receipt instanceof File)) throw new ExpenseValidationError("Choose a receipt file.");
     if (!ALLOWED_TYPES.has(receipt.type)) throw new ExpenseValidationError("Receipt must be a PDF, JPEG, PNG, or WebP file.");

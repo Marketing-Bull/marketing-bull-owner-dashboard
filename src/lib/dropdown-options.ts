@@ -48,6 +48,7 @@ export const DROPDOWN_LIST_KEYS = Object.keys(DROPDOWN_LISTS) as DropdownListKey
 export const MAX_OPTION_LABEL_LENGTH = 60;
 
 export class DropdownOptionError extends Error {}
+export class DropdownOptionNotFoundError extends DropdownOptionError {}
 
 export type DropdownOption = {
   id: string;
@@ -127,12 +128,26 @@ function relabelRecords(db: DatabaseSync, listKey: DropdownListKey, from: string
       .run(to, normalize(from));
     changed += Number(result.changes);
   }
+  if (listKey === "expense.category") {
+    const targetMapping = db
+      .prepare(
+        `SELECT category FROM expense_category_accounts
+         WHERE LOWER(TRIM(category)) = ? AND LOWER(TRIM(category)) <> ?`
+      )
+      .get(normalize(to), normalize(from));
+    if (targetMapping) {
+      db.prepare("DELETE FROM expense_category_accounts WHERE LOWER(TRIM(category)) = ?").run(normalize(from));
+    } else {
+      db.prepare("UPDATE expense_category_accounts SET category = ? WHERE LOWER(TRIM(category)) = ?")
+        .run(to, normalize(from));
+    }
+  }
   return changed;
 }
 
 function getRow(db: DatabaseSync, id: string): Row {
   const row = db.prepare("SELECT * FROM dropdown_options WHERE id = ?").get(id) as Row | undefined;
-  if (!row) throw new DropdownOptionError("No such option.");
+  if (!row) throw new DropdownOptionNotFoundError("No such option.");
   return row;
 }
 

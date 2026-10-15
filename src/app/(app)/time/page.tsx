@@ -226,7 +226,12 @@ function TimeForm({
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   const selectedProject = projects.find((project) => project.id === values.projectId);
   const selectedClient = clients.find((client) => client.id === values.clientId);
-  const rate = frozenRate ?? selectedProject?.hourlyRateOverride ?? selectedClient?.hourlyRate ?? 0;
+  const useFrozenRate =
+    frozenRate !== undefined &&
+    values.clientId === initial.clientId &&
+    values.projectId === initial.projectId &&
+    !(values.billable && frozenRate === 0);
+  const rate = useFrozenRate ? (frozenRate ?? 0) : selectedProject?.hourlyRateOverride ?? selectedClient?.hourlyRate ?? 0;
   const hours = parseHoursInput(values.hours);
   const estimated = (hours ?? 0) * rate;
   // Same wrap rule as hoursBetween: end at or before start runs through midnight.
@@ -337,7 +342,7 @@ function TimeForm({
         <textarea className={styles.textarea} value={values.details} placeholder="What did you work on?" onChange={(event) => setValues((current) => ({ ...current, details: event.target.value }))} />
       </label>
       <div className={styles.calculation} aria-label="Time value calculation">
-        <div><strong>{money(rate)}/hr</strong><span>{frozenRate === undefined ? "Rate at save" : "Frozen rate"}</span></div>
+        <div><strong>{money(rate)}/hr</strong><span>{useFrozenRate ? "Frozen rate" : frozenRate === undefined ? "Rate at save" : "New rate at save"}</span></div>
         <div><strong>Estimated {money(estimated)}</strong><span>{(hours ?? 0).toFixed(2)} hrs × {money(rate)}</span></div>
       </div>
     </form>
@@ -362,6 +367,7 @@ export default function TimePage() {
   const [formSeed, setFormSeed] = useState<FormValues | null>(null);
   const [formKey, setFormKey] = useState(0);
   const [formDirty, setFormDirty] = useState(false);
+  const [sheetNotice, setSheetNotice] = useState("");
   const [deleteEntry, setDeleteEntry] = useState<TimeEntry | null>(null);
   const debouncedSearch = useDebouncedValue(filters.search, 300);
   const debouncedDetails = useDebouncedValue(filters.details, 300);
@@ -419,7 +425,18 @@ export default function TimePage() {
       const json = await response.json();
       if (!response.ok) throw new Error(json?.error || "Time entries fetch failed");
       setEntries(Array.isArray(json?.items) ? json.items : []);
-      setPageInfo((current) => json?.pageInfo ?? current);
+      const nextPageInfo: PageInfo = json?.pageInfo ?? {
+        page: filters.page,
+        pageSize: filters.pageSize,
+        totalItems: 0,
+        totalPages: 0,
+        hasPreviousPage: false,
+        hasNextPage: false
+      };
+      setPageInfo(nextPageInfo);
+      if (nextPageInfo.totalPages > 0 && filters.page > nextPageInfo.totalPages) {
+        patchFilters({ page: nextPageInfo.totalPages }, true);
+      }
       setTotals(json?.filteredTotals ?? { hours: 0, billableHours: 0, amount: 0, billableAmount: 0 });
       setRecentDefaults(json?.recentDefaults ?? null);
     } catch (caught) {
@@ -428,7 +445,7 @@ export default function TimePage() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [ready, requestQuery]);
+  }, [ready, requestQuery, filters.page, filters.pageSize, patchFilters]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -489,6 +506,7 @@ export default function TimePage() {
   }, [filters, clientNames, projectNames, patchFilters]);
 
   function openCreate(seed?: FormValues) {
+    setSheetNotice("");
     setEditingEntry(null);
     setFormSeed(seed ?? blankForm(recentDefaults));
     setFormKey((current) => current + 1);
@@ -497,6 +515,7 @@ export default function TimePage() {
   }
 
   function openEdit(entry: TimeEntry) {
+    setSheetNotice("");
     setEditingEntry(entry);
     setFormSeed(entryForm(entry));
     setFormKey((current) => current + 1);
@@ -640,9 +659,11 @@ export default function TimePage() {
         subtitle={sheetMode === "create" && recentDefaults ? "Using recent client, project, and billing values" : undefined}
         dirty={formDirty}
         onClose={() => setSheetMode(null)}
+        notice={sheetNotice}
+        onNoticeClear={() => setSheetNotice("")}
         footer={<>
-          {sheetMode === "create" ? <button type="submit" form={formId} name="intent" value="another" className={styles.secondaryButton} disabled={busy}>Save & add another</button> : null}
           <button type="submit" form={formId} name="intent" value="close" className={styles.primaryButton} disabled={busy}>{busy ? "Saving…" : sheetMode === "edit" ? "Save changes" : "Save time"}</button>
+          {sheetMode === "create" ? <button type="submit" form={formId} name="intent" value="another" className={styles.secondaryButton} disabled={busy}>Save & add another</button> : null}
         </>}
       >
         {formSeed ? <TimeForm
@@ -661,6 +682,7 @@ export default function TimePage() {
             if (addAnother) {
               setFormSeed({ ...values, hours: "", details: "", startTime: "", endTime: "" });
               setFormKey((current) => current + 1);
+              setSheetNotice("Saved — add the next one");
             } else {
               setSheetMode(null);
             }
@@ -677,10 +699,8 @@ export default function TimePage() {
         onCancel={() => setDeleteEntry(null)}
         onConfirm={async () => {
           if (!deleteEntry) return;
-          const wasLastRow = entries.length === 1 && filters.page > 1;
           if (await mutate("DELETE", `/api/time-entries/${deleteEntry.id}`)) {
             setDeleteEntry(null);
-            if (wasLastRow) patchFilters({ page: filters.page - 1 }, true);
           }
         }}
       />

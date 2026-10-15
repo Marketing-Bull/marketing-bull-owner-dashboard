@@ -12,6 +12,7 @@ import {
   deleteTimeEntry,
   getRecentTimeEntryDefaults,
   getTimeEntry,
+  resolveLocalToday,
   listTimeEntries,
   parseTimeEntryQuery,
   queryTimeEntries,
@@ -98,6 +99,8 @@ describe("time entries", () => {
     expect(() => createTimeEntry(db, { date: "2026-02-30", hours: 1 })).toThrow(/calendar day/i);
     expect(() => createTimeEntry(db, { date: "2026-08-13", hours: 0 })).toThrow(/greater than 0/i);
     expect(() => createTimeEntry(db, { date: "2026-08-13", hours: 25 })).toThrow(/no more than 24/i);
+    expect(() => createTimeEntry(db, { date: "2026-08-13", hours: "0x10" as never })).toThrow(TimeEntryValidationError);
+    expect(() => createTimeEntry(db, { date: "2026-08-13", hours: 1, startTime: "banana" })).toThrow(/HH:MM/i);
     expect(() => createTimeEntry(db, { date: "2026-08-13", hours: 1, clientId: 4 as never })).toThrow(/client id/i);
     expect(() => createTimeEntry(db, { date: "2026-08-13", hours: 1, billable: "yes" as never })).toThrow(/true or false/i);
   });
@@ -150,6 +153,33 @@ describe("time entries", () => {
     expect(result.availableFacets.projects).toEqual([{ value: project.id, count: 1 }]);
   });
 
+  it("rounds exact amount filters to cents and uses local created-date boundaries", () => {
+    const db = freshDb();
+    const entry = createTimeEntry(db, {
+      date: "2026-10-15",
+      hours: 1.15,
+      frozenRate: 100
+    });
+    db.prepare("UPDATE time_entries SET created_at = ? WHERE id = ?").run(
+      "2026-10-16T01:30:00.000Z",
+      entry.id
+    );
+    const originalTimezone = process.env.TZ;
+    process.env.TZ = "America/New_York";
+    try {
+      const result = queryTimeEntries(db, parseTimeEntryQuery(new URLSearchParams({
+        amountMin: "115",
+        amountMax: "115",
+        createdFrom: "2026-10-15",
+        createdTo: "2026-10-15"
+      })));
+      expect(result.items.map((item) => item.id)).toEqual([entry.id]);
+    } finally {
+      if (originalTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTimezone;
+    }
+  });
+
   it("rejects invalid query contracts before SQL execution", () => {
     expect(() => parseTimeEntryQuery(new URLSearchParams("billable=maybe"))).toThrow(/true or false/i);
     expect(() => parseTimeEntryQuery(new URLSearchParams("hoursMin=5&hoursMax=2"))).toThrow(/minimum/i);
@@ -168,15 +198,62 @@ describe("time entries", () => {
     createTimeEntry(db, { projectId: ads.id, date: "2026-07-31", hours: 4 });
 
     const windows = buildLocalHoursWindows(db, new Date(2026, 7, 13, 12));
-    expect(windows.day).toEqual([{ label: "Ads", hours: 1.5 }]);
-    expect(windows.week).toEqual([
+    expect(windows.day.entries).toEqual([{ label: "Ads", hours: 1.5 }]);
+    expect(windows.week.entries).toEqual([
       { label: "Site", hours: 2 },
       { label: "Ads", hours: 1.5 }
     ]);
-    expect(windows.month).toEqual([
+    expect(windows.month.entries).toEqual([
       { label: "Site", hours: 5 },
       { label: "Ads", hours: 1.5 }
     ]);
+    expect(windows.week.totalHours).toBe(3.5);
+    expect(windows.month.totalHours).toBe(6.5);
+  });
+
+  it("keeps totals complete and separates same-named projects beyond the top six", () => {
+    const db = freshDb();
+    const client = createClient(db, { name: "Acme" });
+    const otherClient = createClient(db, { name: "Beta" });
+    for (let index = 0; index < 9; index += 1) {
+      const project = createProject(db, { name: `Project ${index}`, clientId: client.id });
+      createTimeEntry(db, { projectId: project.id, date: "2026-08-13", hours: 2 });
+    }
+    const websiteA = createProject(db, { name: "Website", clientId: client.id });
+    const websiteB = createProject(db, { name: "Website", clientId: otherClient.id });
+    createTimeEntry(db, { projectId: websiteA.id, date: "2026-08-13", hours: 3 });
+    createTimeEntry(db, { projectId: websiteB.id, date: "2026-08-13", hours: 3 });
+
+    const window = buildLocalHoursWindows(db, new Date(2026, 7, 13, 12)).day;
+    expect(window.totalHours).toBe(24);
+    expect(window.entries).toHaveLength(6);
+    expect(window.entries.map((entry) => entry.label)).toContain("Website · Acme");
+    expect(window.entries.map((entry) => entry.label)).toContain("Website · Beta");
+  });
+
+  it("uses a validated browser day for dashboard windows across server timezones", () => {
+    const db = freshDb();
+    const client = createClient(db, { name: "Acme" });
+    const project = createProject(db, { name: "Site", clientId: client.id });
+    createTimeEntry(db, { projectId: project.id, date: "2026-10-31", hours: 2 });
+    createTimeEntry(db, { projectId: project.id, date: "2026-11-01", hours: 3 });
+
+    const originalTimezone = process.env.TZ;
+    try {
+      for (const timezone of ["UTC", "America/Los_Angeles"]) {
+        process.env.TZ = timezone;
+        expect(buildLocalHoursWindows(db, { today: "2026-10-31" }).day.entries).toEqual([
+          { label: "Site", hours: 2 }
+        ]);
+      }
+    } finally {
+      if (originalTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTimezone;
+    }
+
+    expect(resolveLocalToday("2026-02-30", "2026-03-01")).toBe("2026-03-01");
+    expect(resolveLocalToday("2026-03-02", "2026-03-01")).toBe("2026-03-02");
+    expect(resolveLocalToday("2026-03-03", "2026-03-01")).toBe("2026-03-01");
   });
 });
 

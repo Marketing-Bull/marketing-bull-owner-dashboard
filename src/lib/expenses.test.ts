@@ -16,6 +16,7 @@ import {
   listExpenses,
   parseExpenseQuery,
   queryExpenses,
+  receiptContentDisposition,
   setExpenseReceipt,
   updateExpense,
   upsertChartAccount,
@@ -32,6 +33,19 @@ function freshDb(): DatabaseSync {
 afterEach(() => { for (const db of open) try { db.close(); } catch {} open = []; });
 
 describe("expenses", () => {
+  it("builds a safe, UTF-8-capable receipt filename header", () => {
+    for (const name of [
+      "Screenshot 2026-10-15 at 9.41.00\u202fAM.png",
+      "Alex’s receipt.pdf",
+      "收据.pdf"
+    ]) {
+      const disposition = receiptContentDisposition(name);
+      expect(() => new Headers({ "Content-Disposition": disposition })).not.toThrow();
+      const encodedName = disposition.match(/filename\*=UTF-8''(.+)$/)?.[1];
+      expect(decodeURIComponent(encodedName ?? "")).toBe(name);
+    }
+  });
+
   it("validates relations, accounting codes, and preserves expense versus income", () => {
     const db = freshDb();
     const client = createClient(db, { name: "Acme" });
@@ -49,6 +63,14 @@ describe("expenses", () => {
     expect(getExpenseSummary(db)).toEqual({ expenses: 25, income: 100, reimbursable: 0, unpaid: 25 });
     expect(() => createExpense(db, { clientId: other.id, projectId: project.id, date: "2026-08-13", amount: 1, category: "Other" })).toThrow(/different client/i);
     expect(() => createExpense(db, { date: "2026-08-13", amount: 1, category: "Other", accountCode: "9999" })).toThrow(/does not exist/i);
+  });
+
+  it("rejects non-decimal and non-numeric amount inputs", () => {
+    const db = freshDb();
+    expect(() => createExpense(db, { date: "2026-08-13", amount: true as never, category: "Other" }))
+      .toThrow(/amount must be a number/i);
+    expect(() => createExpense(db, { date: "2026-08-13", amount: "0x10" as never, category: "Other" }))
+      .toThrow(/amount must be a number/i);
   });
 
   it("annualizes recurring frequencies and carries definitions", () => {

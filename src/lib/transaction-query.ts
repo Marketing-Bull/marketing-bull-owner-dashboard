@@ -97,6 +97,11 @@ export function numberParam(
   return parsed;
 }
 
+function localMidnightIso(day: string, offsetDays = 0): string {
+  const [year, month, date] = day.split("-").map(Number);
+  return new Date(year, month - 1, date + offsetDays).toISOString();
+}
+
 export function dateParam(params: URLSearchParams, key: string): string | undefined {
   const value = clean(params.get(key));
   if (value === undefined) return undefined;
@@ -108,6 +113,23 @@ export function dateParam(params: URLSearchParams, key: string): string | undefi
     throw new TransactionQueryValidationError(`${key} must be a real calendar day.`);
   }
   return value;
+}
+
+export function addLocalDateRange(
+  clauses: string[],
+  values: QueryScalar[],
+  column: string,
+  from: string | undefined,
+  to: string | undefined
+): void {
+  if (from) {
+    clauses.push(`${column} >= ?`);
+    values.push(localMidnightIso(from));
+  }
+  if (to) {
+    clauses.push(`${column} < ?`);
+    values.push(localMidnightIso(to, 1));
+  }
 }
 
 export function enumParam<T extends string>(

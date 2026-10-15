@@ -63,6 +63,7 @@ export type CalendarEvent = {
   endMs: number;
   allDay: boolean;
   calendarName: string;
+  free?: boolean;
   location?: string;
   href?: string;
 };
@@ -281,6 +282,11 @@ export type HoursEntry = {
   hours: number;
 };
 
+export type HoursWindow = {
+  entries: HoursEntry[];
+  totalHours: number;
+};
+
 export type UpNextTask = {
   id: string;
   title: string;
@@ -358,9 +364,9 @@ export type ClickUpSourceInfo = {
 export type DashboardData = {
   priorities: PriorityBucket[];
   hours: {
-    day: HoursEntry[];
-    week: HoursEntry[];
-    month: HoursEntry[];
+    day: HoursWindow;
+    week: HoursWindow;
+    month: HoursWindow;
   };
   upNext: UpNextTask[];
   source?: "live" | "sample";

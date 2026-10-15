@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDatabase } from "@/lib/dashboard-state";
-import { EntityValidationError, getClient, updateClient } from "@/lib/entities";
+import { EntityValidationError, getClient, updateClient, type ClientInput } from "@/lib/entities";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +17,26 @@ export async function PUT(request: Request, context: Context) {
   const { clientId } = await context.params;
   try {
     const body = await request.json().catch(() => null);
-    if (!body || typeof body !== "object") {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
       return NextResponse.json({ error: "Expected a JSON body." }, { status: 400 });
     }
-    const client = updateClient(getDatabase(), clientId, body);
+    const input = body as Record<string, unknown>;
+    const patch = {
+      name: input.name,
+      status: input.status,
+      paymentType: input.paymentType,
+      mrr: input.mrr,
+      hourlyRate: input.hourlyRate,
+      projectEstCost: input.projectEstCost,
+      paidThroughDate: input.paidThroughDate,
+      invoiceStatus: input.invoiceStatus,
+      contactName: input.contactName,
+      contactEmail: input.contactEmail,
+      contactPhone: input.contactPhone,
+      notes: input.notes,
+      isArchived: input.isArchived
+    } as Partial<ClientInput> & { isArchived?: boolean };
+    const client = updateClient(getDatabase(), clientId, patch);
     return NextResponse.json({ client }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof EntityValidationError) {

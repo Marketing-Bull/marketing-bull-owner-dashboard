@@ -79,22 +79,31 @@ export const SAMPLE_DASHBOARD_DATA: DashboardData = {
     }
   ],
   hours: {
-    day: [
-      { label: "Owner Dashboard", hours: 2.5 },
-      { label: "Admin", hours: 0.5 }
-    ],
-    week: [
-      { label: "Owner Dashboard", hours: 6.5 },
-      { label: "RTT Minisite", hours: 4 },
-      { label: "Mission Control", hours: 2.5 },
-      { label: "Admin", hours: 1.5 }
-    ],
-    month: [
-      { label: "RTT Minisite", hours: 24 },
-      { label: "Owner Dashboard", hours: 18 },
-      { label: "Mission Control", hours: 9 },
-      { label: "Admin", hours: 6 }
-    ]
+    day: {
+      entries: [
+        { label: "Owner Dashboard", hours: 2.5 },
+        { label: "Admin", hours: 0.5 }
+      ],
+      totalHours: 3
+    },
+    week: {
+      entries: [
+        { label: "Owner Dashboard", hours: 6.5 },
+        { label: "RTT Minisite", hours: 4 },
+        { label: "Mission Control", hours: 2.5 },
+        { label: "Admin", hours: 1.5 }
+      ],
+      totalHours: 14.5
+    },
+    month: {
+      entries: [
+        { label: "RTT Minisite", hours: 24 },
+        { label: "Owner Dashboard", hours: 18 },
+        { label: "Mission Control", hours: 9 },
+        { label: "Admin", hours: 6 }
+      ],
+      totalHours: 57
+    }
   },
   upNext: [
     { id: "next-1", title: "Review today's P0 ClickUp items", subtitle: "Priority queue", due: "Today 10:30", priority: "P0", done: false },

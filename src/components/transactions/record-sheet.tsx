@@ -12,7 +12,9 @@ export function RecordSheet({
   error,
   onClose,
   children,
-  footer
+  footer,
+  notice,
+  onNoticeClear
 }: {
   open: boolean;
   title: string;
@@ -23,6 +25,8 @@ export function RecordSheet({
   onClose: () => void;
   children: React.ReactNode;
   footer: React.ReactNode;
+  notice?: string;
+  onNoticeClear?: () => void;
 }) {
   const sheetRef = useRef<HTMLElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -99,7 +103,8 @@ export function RecordSheet({
             {subtitle ? <p>{subtitle}</p> : null}
           </div>
         </header>
-        <div ref={bodyRef} className={styles.sheetBody}>{children}</div>
+        <div ref={bodyRef} className={styles.sheetBody} onChangeCapture={onNoticeClear}>{children}</div>
+        {notice ? <p className={styles.sheetNotice} role="status">{notice}</p> : null}
         {error ? <p className={styles.sheetError} role="alert">{error}</p> : null}
         <footer className={styles.sheetFooter}>{footer}</footer>
       </section>

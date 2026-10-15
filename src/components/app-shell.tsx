@@ -14,7 +14,7 @@
  * each page keeps its own layout exactly as before the shell existed.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -92,6 +92,40 @@ function isActive(pathname: string, href: string): boolean {
 export function AppShell({ version, children }: { version: string; children: React.ReactNode }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const wasOpen = useRef(false);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 860px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!isMobile) {
+      wasOpen.current = false;
+      return;
+    }
+    if (open) {
+      sidebarRef.current?.querySelector<HTMLElement>("a")?.focus();
+    } else if (wasOpen.current) {
+      menuButtonRef.current?.focus();
+    }
+    wasOpen.current = open;
+  }, [isMobile, open]);
+
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [isMobile, open]);
 
   const nav = (
     <>
@@ -144,10 +178,12 @@ export function AppShell({ version, children }: { version: string; children: Rea
     <div className={styles.shell}>
       <div className={styles.topbar}>
         <button
+          ref={menuButtonRef}
           type="button"
           className={styles.topbarButton}
           aria-label={open ? "Close menu" : "Open menu"}
           aria-expanded={open}
+          aria-controls="app-navigation"
           onClick={() => setOpen((value) => !value)}
         >
           {open ? <X size={17} /> : <Menu size={17} />}
@@ -164,7 +200,14 @@ export function AppShell({ version, children }: { version: string; children: Rea
         />
       ) : null}
 
-      <aside className={`${styles.sidebar} ${open ? styles.sidebarOpen : ""}`}>{nav}</aside>
+      <aside
+        ref={sidebarRef}
+        id="app-navigation"
+        inert={isMobile && !open}
+        className={`${styles.sidebar} ${open ? styles.sidebarOpen : ""}`}
+      >
+        {nav}
+      </aside>
 
       <div className={styles.content}>{children}</div>
     </div>

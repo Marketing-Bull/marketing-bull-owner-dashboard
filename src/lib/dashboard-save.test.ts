@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { hasUnsavedChanges, serializeState, type DashboardStatePayload } from "@/lib/dashboard-save";
 import { DEFAULT_WIDGET_ORDER } from "@/lib/dashboard-layout";
 import { DEFAULT_MANUAL_STATE } from "@/lib/sample-data";
+import { mergeDashboardStatePayload, normalizeManualState } from "@/lib/dashboard-state";
 
 /**
  * Cover for issue #5.
@@ -46,6 +47,27 @@ describe("hasUnsavedChanges", () => {
     // had not touched, and wrote a redundant PUT on every load.
     const loaded = payload();
     expect(hasUnsavedChanges(loaded, serializeState(loaded))).toBe(false);
+  });
+
+  describe("partial dashboard-state updates", () => {
+    it("preserves manual values when only widget order is sent", () => {
+      const current = payload({
+        manual: { ...DEFAULT_MANUAL_STATE, mrr: { ...DEFAULT_MANUAL_STATE.mrr, current: "9999" } }
+      });
+      const merged = mergeDashboardStatePayload(current, { widgetOrder: [] });
+      expect(merged.manual.mrr.current).toBe("9999");
+      expect(merged.widgetOrder).toEqual([]);
+    });
+
+    it("assigns a fresh id to duplicate calls across columns", () => {
+      const duplicate = { id: "duplicate", name: "Name", number: "555", checked: false };
+      const manual = normalizeManualState({
+        ...DEFAULT_MANUAL_STATE,
+        phoneCalls: { toMake: [duplicate], made: [duplicate] }
+      });
+      expect(manual.phoneCalls.toMake[0]?.id).toBe("duplicate");
+      expect(manual.phoneCalls.made[0]?.id).not.toBe("duplicate");
+    });
   });
 
   it("reports a change once a field is edited", () => {

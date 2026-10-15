@@ -114,6 +114,7 @@ export type ClientRollup = {
   hourlyRate: number | null;
   paidThroughDate: string;
   invoiceStatus: string;
+  createdAt: string;
   hours: number;
   billableValue: number;
   income: number;
@@ -176,6 +177,7 @@ export type ActivityItem = {
   subtitle: string;
   /** Money value: billable amount, expense/income amount, or reimbursement. */
   amount: number;
+  billable: boolean;
   /** Hours for time, miles for mileage, null for money rows. */
   quantity: number | null;
   href: string;
@@ -391,7 +393,11 @@ function moneyTotals(db: DatabaseSync, from: string, to: string): { income: numb
   const rows = db
     .prepare(
       `SELECT kind, COALESCE(SUM(amount), 0) AS total
-       FROM expenses WHERE paid = 1 AND ${cashDay()} >= ? AND ${cashDay()} <= ? GROUP BY kind`
+       FROM expenses
+       WHERE paid = 1
+         AND COALESCE(NULLIF(paid_on, ''), date) >= ?
+         AND COALESCE(NULLIF(paid_on, ''), date) <= ?
+       GROUP BY kind`
     )
     .all(from, to) as Row[];
 
@@ -612,7 +618,7 @@ function monthLabel(month: string): string {
 function clientRollups(db: DatabaseSync, period: CommandPeriod): ClientRollup[] {
   const clients = db
     .prepare(
-      `SELECT id, name, status, payment_type, mrr, hourly_rate, paid_through_date, invoice_status
+      `SELECT id, name, status, payment_type, mrr, hourly_rate, paid_through_date, invoice_status, created_at
        FROM clients WHERE is_archived = 0 ORDER BY name COLLATE NOCASE`
     )
     .all() as Row[];
@@ -661,7 +667,7 @@ function clientRollups(db: DatabaseSync, period: CommandPeriod): ClientRollup[] 
     const time = timeByClient.get(id);
     const value = money(num(time?.value));
     const mrr = client.mrr === null || client.mrr === undefined ? null : num(client.mrr);
-    const lastActivity = activityByClient.get(id) || null;
+    const lastActivity = activityByClient.get(id) || text(client.created_at).slice(0, 10) || null;
     const paymentType = text(client.payment_type) || "mrr";
 
     return {
@@ -673,6 +679,7 @@ function clientRollups(db: DatabaseSync, period: CommandPeriod): ClientRollup[] 
       hourlyRate: client.hourly_rate === null || client.hourly_rate === undefined ? null : num(client.hourly_rate),
       paidThroughDate: text(client.paid_through_date),
       invoiceStatus: text(client.invoice_status),
+      createdAt: text(client.created_at),
       hours: hours(num(time?.hours)),
       billableValue: value,
       income: money(incomeByClient.get(id) ?? 0),
@@ -727,11 +734,13 @@ function projectRollups(db: DatabaseSync, period: CommandPeriod): ProjectRollup[
 function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
   const rows = db
     .prepare(
-      `SELECT kind, id, date, title, subtitle, amount, quantity FROM (
+      `SELECT kind, id, date, title, subtitle, amount, quantity, billable FROM (
          SELECT 'time' AS kind, t.id AS id, t.date AS date,
                 COALESCE(NULLIF(t.details, ''), 'Time entry') AS title,
                 COALESCE(p.name, c.name, 'Unassigned') AS subtitle,
-                t.hours * t.rate AS amount, t.hours AS quantity, t.created_at AS created_at
+                CASE WHEN t.billable = 1 THEN t.hours * t.rate ELSE 0 END AS amount,
+                t.hours AS quantity, t.billable AS billable,
+                t.created_at AS created_at
          FROM time_entries t
          LEFT JOIN projects p ON p.id = t.project_id
          LEFT JOIN clients c ON c.id = t.client_id
@@ -739,13 +748,13 @@ function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
          SELECT CASE WHEN e.kind = 'income' THEN 'income' ELSE 'expense' END, e.id, e.date,
                 COALESCE(NULLIF(e.vendor, ''), NULLIF(e.details, ''), NULLIF(e.category, ''), 'Record'),
                 COALESCE(NULLIF(e.category, ''), 'Uncategorized'),
-                e.amount, NULL, e.created_at
+                e.amount, NULL, 1, e.created_at
          FROM expenses e
          UNION ALL
          SELECT 'mileage', m.id, m.date,
                 COALESCE(NULLIF(m.trip_name, ''), NULLIF(m.purpose, ''), 'Trip'),
                 COALESCE(c.name, NULLIF(m.end_address, ''), 'Unassigned'),
-                m.total_miles * m.rate, m.total_miles, m.created_at
+                m.total_miles * m.rate, m.total_miles, 1, m.created_at
          FROM mileage_entries m
          LEFT JOIN clients c ON c.id = m.client_id
        )
@@ -770,6 +779,7 @@ function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
       title: text(row.title) || "Record",
       subtitle: text(row.subtitle),
       amount: money(num(row.amount)),
+      billable: Boolean(row.billable),
       quantity: row.quantity === null || row.quantity === undefined ? null : num(row.quantity),
       href: hrefs[kind] ?? "/"
     };
@@ -851,10 +861,10 @@ function cadenceSnapshot(db: DatabaseSync, today: string): CadenceSnapshot {
       `SELECT
          COALESCE(SUM(CASE WHEN date = ? THEN hours ELSE 0 END), 0) AS today_hours,
          COALESCE(SUM(CASE WHEN date >= ? AND date <= ? THEN hours ELSE 0 END), 0) AS week_hours,
-         MAX(date) AS last_entry
+         MAX(CASE WHEN date <= ? THEN date END) AS last_entry
        FROM time_entries`
     )
-    .get(today, weekStart, today) as Row;
+    .get(today, today, weekStart, today) as Row;
 
   const recentDays = db
     .prepare("SELECT DISTINCT date FROM time_entries WHERE date >= ? AND date <= ? ORDER BY date DESC")
@@ -925,15 +935,14 @@ function nameList(names: string[], limit = 3): string {
 export function buildAttention(input: {
   today: string;
   period: CommandPeriod;
+  money: MoneyBand;
   work: WorkBand;
   clients: ClientRollup[];
   projects: ProjectRollup[];
   tax: TaxSnapshot;
   cadence: CadenceSnapshot;
-  /** Accounts payable; optional so callers without a money band still work. */
-  money?: Pick<MoneyBand, "due" | "dueCount">;
 }): AttentionItem[] {
-  const { today, period, work, clients, projects, tax, cadence } = input;
+  const { today, period, money, work, clients, projects, tax, cadence } = input;
   const items: AttentionItem[] = [];
 
   const overdue = clients.filter(
@@ -967,8 +976,8 @@ export function buildAttention(input: {
     });
   }
 
-  if (input.money && input.money.dueCount > 0) {
-    const { due, dueCount } = input.money;
+  if (money.dueCount > 0) {
+    const { due, dueCount } = money;
     items.push({
       id: "accounts-payable",
       severity: "serious",

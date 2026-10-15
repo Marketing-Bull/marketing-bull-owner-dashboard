@@ -66,6 +66,32 @@ describe("dayKey", () => {
   });
 });
 
+describe("normalizeGogEvents", () => {
+  const start = { dateTime: "2026-08-13T10:00:00-04:00" };
+
+  it("drops cancelled, declined, and working-location events", () => {
+    const events = normalizeGogEvents([
+      { id: "cancelled", status: "cancelled", start },
+      { id: "declined", attendees: [{ self: true, responseStatus: "declined" }], start },
+      { id: "location", eventType: "workingLocation", start }
+    ]);
+
+    expect(events).toEqual([]);
+  });
+
+  it("keeps transparent events as free and normal events as scheduled", () => {
+    const events = normalizeGogEvents([
+      { id: "free", transparency: "transparent", start },
+      { id: "meeting", transparency: "opaque", start }
+    ]);
+
+    expect(events.map((event) => [event.id, event.free])).toEqual([
+      ["free", true],
+      ["meeting", false]
+    ]);
+  });
+});
+
 describe("buildDayColumns", () => {
   for (const zone of ZONES) {
     it(`files every hour of every shown day into its own local column in ${zone}`, () => {

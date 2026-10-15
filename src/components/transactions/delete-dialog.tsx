@@ -8,6 +8,7 @@ export function DeleteDialog({
   title,
   description,
   confirmLabel,
+  busyLabel = "Deleting…",
   busy,
   error,
   onCancel,
@@ -17,6 +18,7 @@ export function DeleteDialog({
   title: string;
   description: string;
   confirmLabel: string;
+  busyLabel?: string;
   busy: boolean;
   /** A failed delete, shown in the dialog that covers the page's banner. */
   error?: string | null;
@@ -45,7 +47,7 @@ export function DeleteDialog({
         <div className={styles.dialogActions}>
           <button ref={cancelRef} type="button" className={styles.secondaryButton} onClick={onCancel} disabled={busy}>Cancel</button>
           <button type="button" className={styles.dangerButton} onClick={onConfirm} disabled={busy}>
-            {busy ? "Deleting…" : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </div>
       </section>

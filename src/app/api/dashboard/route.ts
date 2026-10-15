@@ -4,8 +4,9 @@ import { syncClickUpTasks } from "@/lib/clickup-tasks";
 import { normalizeDashboardData } from "@/lib/dashboard-data";
 import { getDatabase, loadDashboardState } from "@/lib/dashboard-state";
 import { reportFallback } from "@/lib/fallback";
+import { todayKey } from "@/lib/history";
 import { SAMPLE_DASHBOARD_DATA } from "@/lib/sample-data";
-import { buildLocalHoursWindows } from "@/lib/time-entries";
+import { buildLocalHoursWindows, resolveLocalToday } from "@/lib/time-entries";
 import type { ClickUpSourceEntry, ClickUpSourceInfo, DashboardData, PriorityBucket, UpNextTask } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -214,9 +215,12 @@ function buildUpNext(tasks: ClickUpTaskCacheInput[], context?: BottleneckContext
     }));
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const upstream = process.env.OWNER_DASHBOARD_DATA_URL?.trim();
   const db = getDatabase();
+  const requestedToday = new URL(request.url).searchParams.get("today");
+  const today = resolveLocalToday(requestedToday, todayKey());
+  const hours = buildLocalHoursWindows(db, { today });
 
   if (upstream) {
     try {
@@ -236,7 +240,7 @@ export async function GET() {
       const normalized = normalizeDashboardData(json);
       // Phase 3 makes local time_entries canonical even when task/priorities
       // arrive through the legacy aggregate upstream.
-      normalized.hours = buildLocalHoursWindows(db);
+      normalized.hours = hours;
       normalized.clickUpSync = getClickUpTaskSyncInfo(db);
       return NextResponse.json(normalized, {
         headers: { "Cache-Control": "no-store" }
@@ -266,7 +270,7 @@ export async function GET() {
       return NextResponse.json(
         {
           ...SAMPLE_DASHBOARD_DATA,
-          hours: buildLocalHoursWindows(db),
+          hours,
           clickUpSync: sync.sync,
           fallbackReason,
           generatedAt: Date.now()
@@ -278,7 +282,7 @@ export async function GET() {
     const tasks = sync.tasks;
     const liveData: DashboardData = {
       priorities: buildPriorityBuckets(tasks),
-      hours: buildLocalHoursWindows(db),
+      hours,
       upNext: buildUpNext(tasks, context),
       source: "live",
       generatedAt: Date.now(),
@@ -296,7 +300,7 @@ export async function GET() {
     return NextResponse.json(
       {
         ...SAMPLE_DASHBOARD_DATA,
-        hours: buildLocalHoursWindows(db),
+        hours,
         clickUpSync: getClickUpTaskSyncInfo(db),
         fallbackReason,
         generatedAt: Date.now()
