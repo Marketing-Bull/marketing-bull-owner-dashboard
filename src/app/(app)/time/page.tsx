@@ -634,7 +634,7 @@ export default function TimePage() {
         </footer>
       </section>
 
-      <RecordSheet
+      <RecordSheet error={error}
         open={sheetMode !== null}
         title={sheetMode === "edit" ? "Edit time" : "Log time"}
         subtitle={sheetMode === "create" && recentDefaults ? "Using recent client, project, and billing values" : undefined}
@@ -668,7 +668,7 @@ export default function TimePage() {
         /> : null}
       </RecordSheet>
 
-      <DeleteDialog
+      <DeleteDialog error={error}
         open={deleteEntry !== null}
         title="Delete time entry?"
         description={deleteEntry ? `${friendlyDate(deleteEntry.date)} · ${deleteEntry.hours.toFixed(2)} hours${deleteEntry.details ? ` · ${deleteEntry.details}` : ""}. This cannot be undone.` : ""}

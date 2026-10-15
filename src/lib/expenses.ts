@@ -157,7 +157,7 @@ export type ExpenseInput = {
   accountCode?: string | null;
   billable?: boolean;
   reimbursable?: boolean;
-  /** Defaults to unpaid (false) on create for AP workflow. */
+  /** On create, defaults to unpaid (false) for expenses (AP) and paid for income. */
   paid?: boolean;
   paidOn?: string | null;
   recurring?: ExpenseFrequency;
@@ -222,9 +222,19 @@ function relationId(value: unknown, label: string): string | null {
   return value.trim() || null;
 }
 
-function resolveRelations(db: DatabaseSync, clientValue: unknown, projectValue: unknown) {
+function resolveRelations(
+  db: DatabaseSync,
+  clientValue: unknown,
+  projectValue: unknown,
+  existing?: { clientId: string | null; projectId: string | null }
+) {
   const requestedClientId = relationId(clientValue, "Client");
   const projectId = relationId(projectValue, "Project");
+  // Unchanged on edit: keep the stored pair even if the project has since
+  // moved to another client, so old rows stay editable.
+  if (existing && requestedClientId === existing.clientId && projectId === existing.projectId) {
+    return { clientId: existing.clientId, projectId: existing.projectId };
+  }
   const project = projectId ? getProject(db, projectId) : null;
   if (projectId && !project) throw new ExpenseValidationError("That project does not exist.");
   const clientId = requestedClientId ?? project?.clientId ?? null;
@@ -619,7 +629,11 @@ function resolvePaidFields(paid: boolean, paidOn: unknown): { paid: boolean; pai
   return { paid: true, paidOn: validateDate(paidOn, "Paid on") };
 }
 
-function validatedExpense(db: DatabaseSync, input: ExpenseInput) {
+function validatedExpense(
+  db: DatabaseSync,
+  input: ExpenseInput,
+  existing?: { clientId: string | null; projectId: string | null }
+) {
   const date = validateDate(input.date);
   const amount = validateAmount(input.amount, input.allowZero);
   const category = text(input.category);
@@ -628,7 +642,7 @@ function validatedExpense(db: DatabaseSync, input: ExpenseInput) {
   if (!isExpenseKind(kind)) throw new ExpenseValidationError("Kind must be expense or income.");
   const recurring = input.recurring ?? "none";
   if (!isExpenseFrequency(recurring)) throw new ExpenseValidationError("Unknown recurring frequency.");
-  const relations = resolveRelations(db, input.clientId, input.projectId);
+  const relations = resolveRelations(db, input.clientId, input.projectId, existing);
   const recurringExpenseId = relationId(input.recurringExpenseId, "Recurring expense");
   if (recurringExpenseId && !getRecurringExpense(db, recurringExpenseId)) {
     throw new ExpenseValidationError("That recurring expense does not exist.");
@@ -644,8 +658,9 @@ function validatedExpense(db: DatabaseSync, input: ExpenseInput) {
 export function createExpense(db: DatabaseSync, input: ExpenseInput): Expense {
   const value = validatedExpense(db, {
     ...input,
-    // New ledger rows start unpaid (AP) unless the caller opts into paid.
-    paid: input.paid ?? false
+    // New expense rows start unpaid (AP) unless the caller opts into paid.
+    // Income is money received, so it has nothing due and starts paid.
+    paid: input.paid ?? (input.kind === "income")
   });
   const id = newEntityId();
   const now = nowIso();
@@ -689,7 +704,7 @@ export function updateExpense(db: DatabaseSync, id: string, patch: Partial<Expen
     tags: patch.tags ?? existing.tags,
     allowZero: existing.amount === 0 || patch.allowZero
   };
-  const value = validatedExpense(db, input);
+  const value = validatedExpense(db, input, existing);
   db.prepare(`UPDATE expenses SET client_id=?, project_id=?, recurring_expense_id=?, date=?, amount=?,
     kind=?, category=?, company=?, vendor=?, details=?, account_code=?, billable=?, reimbursable=?,
     paid=?, paid_on=?, recurring=?, recurring_day=?, payment_method=?, status=?, tags=?, updated_at=? WHERE id=?`
@@ -749,7 +764,11 @@ export function listRecurringExpenses(db: DatabaseSync): RecurringExpense[] {
   return (db.prepare("SELECT * FROM recurring_expenses ORDER BY status, description COLLATE NOCASE").all() as Row[]).map(rowToRecurringExpense);
 }
 
-function validatedRecurring(db: DatabaseSync, input: RecurringExpenseInput) {
+function validatedRecurring(
+  db: DatabaseSync,
+  input: RecurringExpenseInput,
+  existing?: { clientId: string | null; projectId: string | null }
+) {
   const description = text(input.description);
   if (!description) throw new ExpenseValidationError("A recurring expense needs a description.");
   const category = text(input.category);
@@ -766,7 +785,7 @@ function validatedRecurring(db: DatabaseSync, input: RecurringExpenseInput) {
   if (endDate && endDate < startDate) throw new ExpenseValidationError("End date cannot be before start date.");
   return { description, category, frequency, status, startDate, endDate, amount: validateAmount(input.amount, input.allowZero),
     dayOfMonth: validateDay(input.dayOfMonth), accountCode: validateAccount(db, input.accountCode),
-    ...resolveRelations(db, input.clientId, input.projectId) };
+    ...resolveRelations(db, input.clientId, input.projectId, existing) };
 }
 
 export function createRecurringExpense(db: DatabaseSync, input: RecurringExpenseInput): RecurringExpense {
@@ -799,7 +818,7 @@ export function updateRecurringExpense(db: DatabaseSync, id: string, patch: Part
     accountCode: patch.accountCode === undefined ? existing.accountCode : patch.accountCode,
     allowZero: existing.amount === 0 || patch.allowZero
   };
-  const value = validatedRecurring(db, input);
+  const value = validatedRecurring(db, input, existing);
   db.prepare(`UPDATE recurring_expenses SET client_id=?,project_id=?,description=?,vendor=?,amount=?,category=?,
     company=?,frequency=?,day_of_month=?,start_date=?,end_date=?,status=?,notes=?,payment_method=?,account_code=?,updated_at=? WHERE id=?`
   ).run(value.clientId,value.projectId,value.description,text(input.vendor),value.amount,value.category,text(input.company),

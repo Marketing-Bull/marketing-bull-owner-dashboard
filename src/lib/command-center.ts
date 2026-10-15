@@ -484,20 +484,27 @@ export function monthlyRecurringCost(
   return money(total);
 }
 
-function moneyBand(db: DatabaseSync, period: CommandPeriod): MoneyBand {
+function moneyBand(db: DatabaseSync, period: CommandPeriod, today: string): MoneyBand {
   const current = moneyTotals(db, period.from, period.to);
   const previous = moneyTotals(db, period.previousFrom, period.previousTo);
 
   const clientRow = db
     .prepare(
       `SELECT COALESCE(SUM(mrr), 0) AS mrr, COUNT(*) AS clients FROM clients
-       WHERE is_archived = 0 AND status = 'active' AND mrr IS NOT NULL AND mrr > 0`
+       WHERE is_archived = 0 AND status = 'active' AND mrr IS NOT NULL AND mrr > 0
+         AND COALESCE(NULLIF(payment_type, ''), 'mrr') = 'mrr'`
     )
     .get() as Row;
 
   const recurringRows = db
-    .prepare("SELECT amount, frequency FROM recurring_expenses WHERE status = 'active'")
-    .all() as Row[];
+    // Only definitions in force today: an ended subscription or a lease that
+    // has not started yet is not part of this month's fixed cost.
+    .prepare(
+      `SELECT amount, frequency FROM recurring_expenses
+       WHERE status = 'active' AND start_date <= ?
+         AND (end_date IS NULL OR end_date = '' OR end_date >= ?)`
+    )
+    .all(today, today) as Row[];
 
   const committedMrr = money(num(clientRow.mrr));
   const fixedMonthlyCost = monthlyRecurringCost(
@@ -623,12 +630,13 @@ function clientRollups(db: DatabaseSync, period: CommandPeriod): ClientRollup[] 
     const value = money(num(time?.value));
     const mrr = client.mrr === null || client.mrr === undefined ? null : num(client.mrr);
     const lastActivity = activityByClient.get(id) || null;
+    const paymentType = text(client.payment_type) || "mrr";
 
     return {
       id,
       name: text(client.name) || "Unnamed client",
       status: text(client.status) || "active",
-      paymentType: text(client.payment_type) || "mrr",
+      paymentType,
       mrr,
       hourlyRate: client.hourly_rate === null || client.hourly_rate === undefined ? null : num(client.hourly_rate),
       paidThroughDate: text(client.paid_through_date),
@@ -637,7 +645,9 @@ function clientRollups(db: DatabaseSync, period: CommandPeriod): ClientRollup[] 
       billableValue: value,
       income: money(incomeByClient.get(id) ?? 0),
       lastActivity,
-      retainerCoverage: monthlyWindow && mrr && mrr > 0 && value > 0 ? value / mrr : null
+      // Only retainer clients have a monthly allowance to be over-serviced on.
+      retainerCoverage:
+        monthlyWindow && paymentType === "mrr" && mrr && mrr > 0 && value > 0 ? value / mrr : null
     };
   });
 }
@@ -1022,7 +1032,7 @@ export function buildCommandCenter(
   const today = options.today ?? todayKey();
   const period = resolvePeriod(options.period ?? DEFAULT_COMMAND_PERIOD, today);
 
-  const money = moneyBand(db, period);
+  const money = moneyBand(db, period, today);
   const current = workTotals(db, period.from, period.to);
   const previous = workTotals(db, period.previousFrom, period.previousTo);
   const work: WorkBand = {
