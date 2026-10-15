@@ -159,6 +159,7 @@ create table if not exists owner_dashboard.mileage_entries (
   miles numeric,
   round_trip boolean,
   total_miles numeric,
+  rate numeric,
   billable boolean,
   notes text,
   calculation_source text,
@@ -172,6 +173,9 @@ create table if not exists owner_dashboard.mileage_entries (
   updated_at text,
   synced_at timestamptz not null default now()
 );
+
+-- Added after the first apply; `create table if not exists` won't add it.
+alter table owner_dashboard.mileage_entries add column if not exists rate numeric;
 
 -- Accounting reference ------------------------------------------------------
 

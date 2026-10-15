@@ -168,7 +168,8 @@ function rowToMileage(row: Row): MileageEntry {
     projectId: row.project_id == null ? null : String(row.project_id),
     tripName: text(row.trip_name), date: String(row.date), startAddress: text(row.start_address),
     endAddress: text(row.end_address), purpose: text(row.purpose), miles: Number(row.miles),
-    roundTrip: Boolean(row.round_trip), totalMiles: Number(row.total_miles), billable: Boolean(row.billable),
+    roundTrip: Boolean(row.round_trip), totalMiles: Number(row.total_miles), rate: Number(row.rate),
+    billable: Boolean(row.billable),
     notes: typeof row.notes === "string" ? row.notes : "",
     calculationSource: row.calculation_source === "provider" ? "provider" : "manual",
     calculationProvider: row.calculation_provider == null ? null : String(row.calculation_provider),
@@ -260,7 +261,10 @@ export function parseMileageQuery(params: URLSearchParams): MileageQuery {
   return query;
 }
 
-function mileageWhere(query: MileageQuery, rate: number): { where: string; params: QueryScalar[] } {
+/** Each trip's own frozen rate; rounded so an exact-amount filter can match. */
+const REIMBURSEMENT_SQL = "ROUND(total_miles * rate, 2)";
+
+function mileageWhere(query: MileageQuery): { where: string; params: QueryScalar[] } {
   const clauses: string[] = [];
   const params: QueryScalar[] = [];
   const exact = (column: string, value: QueryScalar | undefined) => {
@@ -278,7 +282,6 @@ function mileageWhere(query: MileageQuery, rate: number): { where: string; param
     clauses.push(`${column} <= ?`);
     params.push(value);
   };
-  const reimbursementSql = `(total_miles * ${rate})`;
 
   exact("id", query.id);
   exact("mc_id", query.mcId);
@@ -297,8 +300,8 @@ function mileageWhere(query: MileageQuery, rate: number): { where: string; param
   maximum("total_miles", query.totalMilesMax);
   exact("billable", query.billable === undefined ? undefined : query.billable ? 1 : 0);
   addLikeFilter(clauses, params, "notes", query.notes);
-  minimum(reimbursementSql, query.reimbursementMin);
-  maximum(reimbursementSql, query.reimbursementMax);
+  minimum(REIMBURSEMENT_SQL, query.reimbursementMin);
+  maximum(REIMBURSEMENT_SQL, query.reimbursementMax);
   addLikeFilter(
     clauses,
     params,
@@ -316,8 +319,7 @@ export function queryMileageEntries(
   db: DatabaseSync,
   query: MileageQuery
 ): TransactionQueryResult<MileageEntry, MileageQueryTotals, MileageQueryFacets> {
-  const rate = getMileageRate(db);
-  const { where, params } = mileageWhere(query, rate);
+  const { where, params } = mileageWhere(query);
   const totalItems = countRows(db, "mileage_entries", where, params);
   const sortColumns: Record<MileageSort, string> = {
     date: "date",
@@ -329,7 +331,7 @@ export function queryMileageEntries(
     roundTrip: "round_trip",
     totalMiles: "total_miles",
     billable: "billable",
-    reimbursement: `(total_miles * ${rate})`,
+    reimbursement: REIMBURSEMENT_SQL,
     createdAt: "created_at",
     updatedAt: "updated_at"
   };
@@ -338,8 +340,9 @@ export function queryMileageEntries(
   const rows = db.prepare(`SELECT * FROM mileage_entries ${where}
       ORDER BY ${sortColumns[query.sort]} ${direction}, created_at ${direction}, id ${direction}
       LIMIT ? OFFSET ?`).all(...params, query.pageSize, offset) as Row[];
-  const totals = db.prepare(`SELECT COUNT(*) AS entries, COALESCE(SUM(total_miles), 0) AS total_miles
-    FROM mileage_entries ${where}`).get(...params) as { entries: number; total_miles: number };
+  const totals = db.prepare(`SELECT COUNT(*) AS entries, COALESCE(SUM(total_miles), 0) AS total_miles,
+    COALESCE(SUM(total_miles * rate), 0) AS reimbursement
+    FROM mileage_entries ${where}`).get(...params) as { entries: number; total_miles: number; reimbursement: number };
   const totalMiles = Number(totals.total_miles);
   return {
     items: rows.map(rowToMileage),
@@ -347,7 +350,7 @@ export function queryMileageEntries(
     filteredTotals: {
       entries: Number(totals.entries),
       totalMiles,
-      reimbursement: Number((totalMiles * rate).toFixed(2))
+      reimbursement: Number(Number(totals.reimbursement).toFixed(2))
     },
     availableFacets: {
       clients: facetCounts(db, "mileage_entries", "COALESCE(client_id, '__unassigned__')", where, params),
@@ -364,13 +367,14 @@ export function createMileageEntry(db: DatabaseSync, input: MileageInput): Milea
   const id = newEntityId();
   const now = nowIso();
   const calculationSource = input.calculationSource === "provider" ? "provider" : "manual";
+  // The rate is frozen here and never touched by an edit.
   db.prepare(`INSERT INTO mileage_entries (id,mc_id,client_id,project_id,trip_name,date,start_address,
-    end_address,purpose,miles,round_trip,total_miles,billable,notes,calculation_source,calculation_provider,
+    end_address,purpose,miles,round_trip,total_miles,rate,billable,notes,calculation_source,calculation_provider,
     calculated_miles,route_metadata_json,calculated_at,start_place_id,end_place_id,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(id,input.mcId ?? null,value.clientId,value.projectId,text(input.tripName),value.date,
     text(input.startAddress),text(input.endAddress),text(input.purpose),value.miles,value.roundTrip ? 1 : 0,
-    value.totalMiles,input.billable ? 1 : 0,text(input.notes),calculationSource,
+    value.totalMiles,getMileageRate(db),input.billable ? 1 : 0,text(input.notes),calculationSource,
     calculationSource === "provider" ? text(input.calculationProvider) || null : null,
     calculationSource === "provider" && input.calculatedMiles != null ? finiteNumber(input.calculatedMiles, "Calculated miles") : null,
     calculationSource === "provider" ? input.routeMetadataJson ?? null : null,
@@ -446,7 +450,7 @@ export function setMileageRate(db: DatabaseSync, value: unknown): number {
 }
 
 export function getMileageSummary(db: DatabaseSync): { totalMiles: number; reimbursement: number; entries: number } {
-  const row = db.prepare("SELECT COALESCE(SUM(total_miles),0) AS miles, COUNT(*) AS entries FROM mileage_entries").get() as { miles: number; entries: number };
-  const miles = Number(row.miles);
-  return { totalMiles: miles, reimbursement: Number((miles * getMileageRate(db)).toFixed(2)), entries: Number(row.entries) };
+  const row = db.prepare(`SELECT COALESCE(SUM(total_miles),0) AS miles, COALESCE(SUM(total_miles * rate),0) AS amount,
+    COUNT(*) AS entries FROM mileage_entries`).get() as { miles: number; amount: number; entries: number };
+  return { totalMiles: Number(row.miles), reimbursement: Number(Number(row.amount).toFixed(2)), entries: Number(row.entries) };
 }

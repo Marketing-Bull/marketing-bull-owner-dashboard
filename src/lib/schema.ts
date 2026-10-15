@@ -438,5 +438,21 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
         CREATE INDEX idx_expenses_paid ON expenses(paid);
       `);
     }
+  },
+  {
+    // Each trip keeps the reimbursement rate in force when it was logged, the
+    // way a time entry freezes its hourly rate, so changing the setting never
+    // restates past years. Existing trips take today's setting, read with the
+    // same rules as getMileageRate (anything unusable falls back to 0.67).
+    id: "012-mileage-rate",
+    up: (db) => {
+      db.exec("ALTER TABLE mileage_entries ADD COLUMN rate REAL NOT NULL DEFAULT 0.67 CHECK (rate >= 0);");
+      const row = db.prepare("SELECT value FROM app_settings WHERE key = 'mileage.rate'").get() as
+        | { value?: unknown }
+        | undefined;
+      const setting = Number(row?.value);
+      const rate = Number.isFinite(setting) && setting >= 0 ? setting : 0.67;
+      db.prepare("UPDATE mileage_entries SET rate = ?").run(rate);
+    }
   }
 ];

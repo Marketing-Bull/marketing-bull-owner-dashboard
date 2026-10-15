@@ -243,3 +243,15 @@ describe("runMissionControlImport", () => {
     expect(listTimeEntries(dash)).toHaveLength(0);
   });
 });
+
+describe("imported mileage rate", () => {
+  it("freezes Mission Control's rate on imported trips, not the dashboard default", () => {
+    const mc = mcDb();
+    mc.prepare("UPDATE settings SET value = '0.655' WHERE key = 'mileage_rate'").run();
+    const dash = dashDb();
+    runMissionControlImport(mc, dash);
+
+    const rates = dash.prepare("SELECT rate FROM mileage_entries").all() as Array<{ rate: number }>;
+    expect(rates.map((row) => row.rate)).toEqual([0.655]);
+  });
+});
