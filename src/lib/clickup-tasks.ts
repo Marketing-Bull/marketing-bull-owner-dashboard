@@ -13,6 +13,7 @@
  * way instead of each keeping their own copy of the query.
  */
 
+import { dueHasTime, startOfLocalDay } from "@/lib/clickup-due";
 import type { DatabaseSync } from "node:sqlite";
 import { fetchClickUpJson, getClickUpApiKey } from "@/lib/clickup";
 import {
@@ -135,6 +136,12 @@ function rowToTask(row: Row): ClickUpTaskRecord {
     name: String(row.name),
     url: optionalText(row.url),
     dueDate: optionalNumber(row.due_date),
+    dueHasTime:
+      optionalNumber(row.due_date) === null
+        ? null
+        : row.due_date_time == null
+          ? dueHasTime(Number(row.due_date))
+          : Number(row.due_date_time) === 1,
     updatedAt: optionalNumber(row.date_updated),
     priority: optionalText(row.priority),
     status: optionalText(row.status),
@@ -207,6 +214,22 @@ function addOptionalInFilter(
   clauses.push(`(${parts.join(" OR ")})`);
 }
 
+/**
+ * Overdue as a 0/1 expression. A task with a time is overdue once that time has
+ * passed; a date-only task (due_date_time = 0, stamped 04:00) only once its day
+ * is over. Placeholders: now, start of today.
+ */
+const OVERDUE_SQL = `CASE WHEN t.due_date IS NOT NULL AND t.due_date <> '' AND (
+  (COALESCE(t.due_date_time, 1) = 1 AND CAST(t.due_date AS INTEGER) < ?) OR
+  (t.due_date_time = 0 AND CAST(t.due_date AS INTEGER) < ?)
+) THEN 1 ELSE 0 END`;
+
+/** Due within a week and not yet overdue. Placeholders: now, now + 7 days, start of today, now + 7 days. */
+const DUE_SOON_SQL = `CASE WHEN t.due_date IS NOT NULL AND t.due_date <> '' AND (
+  (COALESCE(t.due_date_time, 1) = 1 AND CAST(t.due_date AS INTEGER) BETWEEN ? AND ?) OR
+  (t.due_date_time = 0 AND CAST(t.due_date AS INTEGER) BETWEEN ? AND ?)
+) THEN 1 ELSE 0 END`;
+
 function taskWhere(query: ClickUpTaskQuery, nowMs: number): { where: string; params: QueryScalar[] } {
   const clauses: string[] = [];
   const params: QueryScalar[] = [];
@@ -236,8 +259,8 @@ function taskWhere(query: ClickUpTaskQuery, nowMs: number): { where: string; par
   if (query.dueTo) { clauses.push(`${hasDue} AND ${dueMs} <= ?`); params.push(endOfDayMs(query.dueTo)); }
   if (query.hasDueDate === true) clauses.push(`(${hasDue})`);
   if (query.hasDueDate === false) clauses.push("(t.due_date IS NULL OR t.due_date = '')");
-  if (query.overdue === true) { clauses.push(`${hasDue} AND ${dueMs} < ?`); params.push(nowMs); }
-  if (query.overdue === false) { clauses.push(`(t.due_date IS NULL OR t.due_date = '' OR ${dueMs} >= ?)`); params.push(nowMs); }
+  if (query.overdue === true) { clauses.push(`(${OVERDUE_SQL}) = 1`); params.push(nowMs, startOfLocalDay(nowMs)); }
+  if (query.overdue === false) { clauses.push(`(${OVERDUE_SQL}) = 0`); params.push(nowMs, startOfLocalDay(nowMs)); }
 
   if (query.updatedFrom) { clauses.push("CAST(t.date_updated AS INTEGER) >= ?"); params.push(startOfDayMs(query.updatedFrom)); }
   if (query.updatedTo) { clauses.push("CAST(t.date_updated AS INTEGER) <= ?"); params.push(endOfDayMs(query.updatedTo)); }
@@ -304,13 +327,17 @@ export function queryClickUpTasks(
     .prepare(`
       SELECT
         COUNT(*) AS tasks,
-        COALESCE(SUM(CASE WHEN t.due_date IS NOT NULL AND t.due_date <> '' AND CAST(t.due_date AS INTEGER) < ? THEN 1 ELSE 0 END), 0) AS overdue,
-        COALESCE(SUM(CASE WHEN t.due_date IS NOT NULL AND t.due_date <> '' AND CAST(t.due_date AS INTEGER) BETWEEN ? AND ? THEN 1 ELSE 0 END), 0) AS due_soon,
+        COALESCE(SUM(${OVERDUE_SQL}), 0) AS overdue,
+        COALESCE(SUM(${DUE_SOON_SQL}), 0) AS due_soon,
         COALESCE(SUM(CASE WHEN t.client_id IS NULL AND t.project_id IS NULL THEN 1 ELSE 0 END), 0) AS unassigned
       FROM ${TASK_SOURCE}
       ${where}
     `)
-    .get(nowMs, nowMs, nowMs + 7 * DAY_MS, ...params) as Row;
+    .get(
+      nowMs, startOfLocalDay(nowMs),
+      nowMs, nowMs + 7 * DAY_MS, startOfLocalDay(nowMs), nowMs + 7 * DAY_MS,
+      ...params
+    ) as Row;
 
   return {
     items: rows.map(rowToTask),

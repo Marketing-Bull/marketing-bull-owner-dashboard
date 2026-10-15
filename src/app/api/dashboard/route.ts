@@ -1,3 +1,4 @@
+import { dueHasTime } from "@/lib/clickup-due";
 import { NextResponse } from "next/server";
 import { getClickUpTaskSyncInfo, type ClickUpTaskCacheInput } from "@/lib/clickup-task-cache";
 import { syncClickUpTasks } from "@/lib/clickup-tasks";
@@ -58,7 +59,7 @@ function parsePriority(task: ClickUpTaskCacheInput): UpNextTask["priority"] {
   return "P3";
 }
 
-function formatDueLabel(dueDate: string | null | undefined): string {
+function formatDueLabel(dueDate: string | null | undefined, hasTime = true): string {
   if (!dueDate) return "No due date";
   const date = new Date(Number(dueDate));
   if (!Number.isFinite(date.getTime())) return "No due date";
@@ -66,6 +67,8 @@ function formatDueLabel(dueDate: string | null | undefined): string {
   const tomorrow = new Date(now);
   tomorrow.setDate(now.getDate() + 1);
   if (date.toDateString() === now.toDateString()) {
+    // A date-only due date is stamped 04:00; showing "Today 4:00 AM" would invent a time.
+    if (!hasTime) return "Today";
     return `Today ${new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(date)}`;
   }
   if (date.toDateString() === tomorrow.toDateString()) return "Tomorrow";
@@ -207,7 +210,7 @@ function buildUpNext(tasks: ClickUpTaskCacheInput[], context?: BottleneckContext
         context && context.bottleneck.trim()
           ? `${taskContext(task)} · clears: ${context.bottleneck}`
           : taskContext(task),
-      due: formatDueLabel(task.due_date),
+      due: formatDueLabel(task.due_date, dueHasTime(Number(task.due_date), task.due_date_time)),
       priority: parsePriority(task),
       done: false,
       href: task.url,

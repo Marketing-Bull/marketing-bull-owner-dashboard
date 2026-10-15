@@ -171,3 +171,26 @@ describe("ClickUp task cache", () => {
     });
   });
 });
+
+describe("due_date_time migration", () => {
+  it("backfills existing cached tasks, marking the 04:00 stamp as date-only", () => {
+    const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "owner-dash-due-")), "dash.sqlite"));
+    runMigrations(db, DASHBOARD_MIGRATIONS.filter((migration) => migration.id !== "013-clickup-due-date-time"));
+    const insert = db.prepare(
+      "INSERT INTO clickup_tasks (id, name, due_date, raw_json, synced_at) VALUES (?, ?, ?, '{}', 'x')"
+    );
+    insert.run("dateonly", "Date only", String(new Date(2026, 9, 15, 4, 0, 0).getTime()));
+    insert.run("timed", "Timed", String(new Date(2026, 9, 15, 19, 0, 0).getTime()));
+    insert.run("undated", "Undated", null);
+
+    runMigrations(db, DASHBOARD_MIGRATIONS);
+    const flags = new Map(
+      (db.prepare("SELECT id, due_date_time FROM clickup_tasks").all() as Array<{ id: string; due_date_time: number | null }>)
+        .map((row) => [row.id, row.due_date_time])
+    );
+    expect(flags.get("dateonly")).toBe(0);
+    expect(flags.get("timed")).toBe(1);
+    expect(flags.get("undated")).toBeNull();
+    db.close();
+  });
+});

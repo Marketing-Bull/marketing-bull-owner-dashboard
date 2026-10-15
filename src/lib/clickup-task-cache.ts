@@ -5,6 +5,7 @@ import {
   resolveClickUpTaskAssociation,
   type ClickUpAssociationSource
 } from "@/lib/clickup-task-association";
+import { dueHasTime } from "@/lib/clickup-due";
 import type { ClickUpSyncInfo } from "@/lib/types";
 
 export const CLICKUP_TASK_SYNC_SOURCE = "assigned_tasks";
@@ -15,6 +16,8 @@ export type ClickUpTaskCacheInput = {
   name: string;
   url?: string;
   due_date?: string | null;
+  /** True when the due date has a time of day; not every ClickUp payload carries it. */
+  due_date_time?: boolean | null;
   date_updated?: string;
   priority?: {
     priority?: string | null;
@@ -221,10 +224,10 @@ export function replaceCachedClickUpTasks(
     db.prepare("DELETE FROM clickup_tasks").run();
     const insert = db.prepare(`
       INSERT INTO clickup_tasks (
-        id, name, url, due_date, date_updated, priority, status, list_id, list_name,
+        id, name, url, due_date, due_date_time, date_updated, priority, status, list_id, list_name,
         folder_id, folder_name, space_id, space_name, client_id, project_id,
         association_source, task_type, raw_json, synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const task of tasks) {
@@ -235,6 +238,7 @@ export function replaceCachedClickUpTasks(
         task.name,
         optionalText(task.url),
         optionalText(task.due_date),
+        dueTimeFlag(task),
         optionalText(task.date_updated),
         optionalText(task.priority?.priority),
         optionalText(task.status?.status),
@@ -290,6 +294,25 @@ export function recordClickUpTaskSyncFailure(
       updated_at = excluded.updated_at
   `).run(CLICKUP_TASK_SYNC_SOURCE, attemptedAtIso, message, attemptedAtIso);
   return message;
+}
+
+/** 1 when the due date has a time of day, 0 when date-only, null with no due date. */
+function dueTimeFlag(task: ClickUpTaskCacheInput): number | null {
+  const dueMs = Number(task.due_date);
+  if (!task.due_date || !Number.isFinite(dueMs)) return null;
+  return dueHasTime(dueMs, task.due_date_time) ? 1 : 0;
+}
+
+/**
+ * The cached row for a task id, or null when it isn't cached. Routes that write
+ * back to ClickUp read the list from here, never from the request, so a caller
+ * can only act on a task this app has actually synced.
+ */
+export function getCachedClickUpTaskList(db: DatabaseSync, taskId: string): { listId: string | null } | null {
+  const row = db.prepare("SELECT list_id FROM clickup_tasks WHERE id = ?").get(taskId) as
+    | { list_id: string | null }
+    | undefined;
+  return row ? { listId: row.list_id } : null;
 }
 
 export function deleteCachedClickUpTask(db: DatabaseSync, taskId: string): void {

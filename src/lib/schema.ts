@@ -1,3 +1,5 @@
+import { dueHasTime } from "@/lib/clickup-due";
+
 /**
  * The dashboard's schema, as an ordered migration list (see `@/lib/migrations`).
  *
@@ -453,6 +455,24 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
       const setting = Number(row?.value);
       const rate = Number.isFinite(setting) && setting >= 0 ? setting : 0.67;
       db.prepare("UPDATE mileage_entries SET rate = ?").run(rate);
+    }
+  },
+  {
+    // ClickUp stores a due date set without a time at 04:00 local on that day,
+    // so as an instant it reads as overdue from 4 AM on the due day. 1 = the due
+    // date has a time of day, 0 = date only, NULL = no due date. The cache is
+    // rebuilt on every sync; the backfill covers the hour until the next one.
+    id: "013-clickup-due-date-time",
+    up: (db) => {
+      db.exec("ALTER TABLE clickup_tasks ADD COLUMN due_date_time INTEGER;");
+      const rows = db
+        .prepare("SELECT id, due_date FROM clickup_tasks WHERE due_date IS NOT NULL AND due_date <> ''")
+        .all() as Array<{ id: string; due_date: string }>;
+      const update = db.prepare("UPDATE clickup_tasks SET due_date_time = ? WHERE id = ?");
+      for (const row of rows) {
+        const dueMs = Number(row.due_date);
+        if (Number.isFinite(dueMs)) update.run(dueHasTime(dueMs) ? 1 : 0, row.id);
+      }
     }
   }
 ];

@@ -323,6 +323,8 @@ export type ClickUpTaskRecord = {
   name: string;
   url: string | null;
   dueDate: number | null;
+  /** False for a date-only due date (stamped 04:00); null with no due date. */
+  dueHasTime: boolean | null;
   updatedAt: number | null;
   priority: string | null;
   status: string | null;

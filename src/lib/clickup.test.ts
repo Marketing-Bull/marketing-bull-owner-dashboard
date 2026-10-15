@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { clickUpApiBase, pickStatusForDone } from "@/lib/clickup";
+import { clickUpApiBase, isClickUpId, pickStatusForDone } from "@/lib/clickup";
 
 /**
  * Cover for the only code in the app that mutates real ClickUp tasks.
@@ -84,5 +84,18 @@ describe("clickUpApiBase", () => {
   it("ignores a blank override rather than building a relative URL", () => {
     process.env.OWNER_DASHBOARD_CLICKUP_API_BASE = "   ";
     expect(clickUpApiBase()).toBe("https://api.clickup.com/api/v2");
+  });
+});
+
+describe("isClickUpId", () => {
+  it("accepts the ids ClickUp actually uses", () => {
+    for (const id of ["868kh0y3b", "901113884029", "DEV-1234", "a_b-c"]) expect(isClickUpId(id)).toBe(true);
+  });
+
+  it("rejects anything that could change the path or query of a request", () => {
+    for (const id of ["", "a/../b", "123?x=", "abc/def", "..", "a b", "%2F", "x#y", "a".repeat(65)]) {
+      expect(isClickUpId(id)).toBe(false);
+    }
+    for (const id of [undefined, null, 123, {}, ["abc"]]) expect(isClickUpId(id)).toBe(false);
   });
 });
