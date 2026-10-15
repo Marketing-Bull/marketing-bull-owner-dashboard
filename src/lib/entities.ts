@@ -21,6 +21,7 @@ import {
   type Project,
   type ProjectStatus
 } from "@/lib/types";
+import { parseMoneyInput } from "@/lib/money-input";
 
 export function newEntityId(): string {
   return crypto.randomUUID();
@@ -77,6 +78,13 @@ function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** A hand-entered money field: blank clears it, junk or negatives are refused. */
+function moneyField(value: unknown, label: string): number | null {
+  const parsed = parseMoneyInput(value, label);
+  if (parsed.error) throw new EntityValidationError(parsed.error);
+  return parsed.value;
 }
 
 function text(value: unknown): string {
@@ -188,9 +196,9 @@ export function createClient(db: DatabaseSync, input: ClientInput): Client {
     name,
     input.status ?? "active",
     input.paymentType ?? "mrr",
-    numberOrNull(input.mrr),
-    numberOrNull(input.hourlyRate),
-    numberOrNull(input.projectEstCost),
+    moneyField(input.mrr, "MRR"),
+    moneyField(input.hourlyRate, "Hourly rate"),
+    moneyField(input.projectEstCost, "Project estimate"),
     text(input.paidThroughDate),
     text(input.invoiceStatus),
     text(input.contactName),
@@ -230,9 +238,9 @@ export function updateClient(db: DatabaseSync, id: string, patch: Partial<Client
     name,
     patch.status ?? existing.status,
     patch.paymentType ?? existing.paymentType,
-    patch.mrr === undefined ? existing.mrr : numberOrNull(patch.mrr),
-    patch.hourlyRate === undefined ? existing.hourlyRate : numberOrNull(patch.hourlyRate),
-    patch.projectEstCost === undefined ? existing.projectEstCost : numberOrNull(patch.projectEstCost),
+    patch.mrr === undefined ? existing.mrr : moneyField(patch.mrr, "MRR"),
+    patch.hourlyRate === undefined ? existing.hourlyRate : moneyField(patch.hourlyRate, "Hourly rate"),
+    patch.projectEstCost === undefined ? existing.projectEstCost : moneyField(patch.projectEstCost, "Project estimate"),
     patch.paidThroughDate === undefined ? existing.paidThroughDate : text(patch.paidThroughDate),
     patch.invoiceStatus === undefined ? existing.invoiceStatus : text(patch.invoiceStatus),
     patch.contactName === undefined ? existing.contactName : text(patch.contactName),
@@ -313,7 +321,7 @@ export function createProject(db: DatabaseSync, input: ProjectInput): Project {
     input.clientId ?? null,
     name,
     typeof input.description === "string" ? input.description : "",
-    numberOrNull(input.hourlyRateOverride),
+    moneyField(input.hourlyRateOverride, "Rate override"),
     input.status ?? "active",
     typeof input.notes === "string" ? input.notes : "",
     input.urgent ? 1 : 0,
@@ -358,7 +366,7 @@ export function updateProject(
     name,
     patch.clientId === undefined ? existing.clientId : patch.clientId,
     patch.description === undefined ? existing.description : (typeof patch.description === "string" ? patch.description : ""),
-    patch.hourlyRateOverride === undefined ? existing.hourlyRateOverride : numberOrNull(patch.hourlyRateOverride),
+    patch.hourlyRateOverride === undefined ? existing.hourlyRateOverride : moneyField(patch.hourlyRateOverride, "Rate override"),
     patch.status ?? existing.status,
     patch.notes === undefined ? existing.notes : (typeof patch.notes === "string" ? patch.notes : ""),
     (patch.urgent === undefined ? existing.urgent : patch.urgent) ? 1 : 0,

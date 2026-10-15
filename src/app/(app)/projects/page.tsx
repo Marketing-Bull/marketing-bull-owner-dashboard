@@ -11,6 +11,7 @@ import { LoaderCircle, Plus } from "lucide-react";
 import { DeleteDialog } from "@/components/transactions/delete-dialog";
 import styles from "../entities.module.css";
 import { PROJECT_STATUSES, type Client, type Project, type ProjectStatus } from "@/lib/types";
+import { parseMoneyInput } from "@/lib/money-input";
 
 function redirectedToLogin(response: Response): boolean {
   if (response.status !== 401) return false;
@@ -64,7 +65,7 @@ function toPayload(form: FormValues) {
     name: form.name,
     clientId: form.clientId === "" ? null : form.clientId,
     status: form.status,
-    hourlyRateOverride: form.hourlyRateOverride.trim() === "" ? null : Number(form.hourlyRateOverride),
+    hourlyRateOverride: parseMoneyInput(form.hourlyRateOverride).value,
     urgent: form.urgent,
     important: form.important,
     description: form.description,
@@ -90,12 +91,14 @@ function ProjectForm({
   const [values, setValues] = useState<FormValues>(initial);
   const set = (key: keyof FormValues) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setValues((current) => ({ ...current, [key]: event.target.value }));
+  const rateError = parseMoneyInput(values.hourlyRateOverride, "Rate override").error;
 
   return (
     <form
       className={styles.form}
       onSubmit={(event) => {
         event.preventDefault();
+        if (rateError) return;
         onSubmit(values);
       }}
     >
@@ -122,7 +125,8 @@ function ProjectForm({
       </label>
       <label className={styles.field}>
         <span className={styles.label}>Rate override ($/hr)</span>
-        <input className={styles.input} inputMode="decimal" value={values.hourlyRateOverride} onChange={set("hourlyRateOverride")} />
+        <input className={styles.input} inputMode="decimal" value={values.hourlyRateOverride} onChange={set("hourlyRateOverride")} aria-invalid={Boolean(rateError)} />
+        {rateError ? <span className={styles.fieldError} role="alert">{rateError}</span> : null}
       </label>
       <label className={styles.checkboxField}>
         <input
@@ -149,7 +153,7 @@ function ProjectForm({
         <textarea className={styles.textarea} value={values.notes} onChange={set("notes")} />
       </label>
       <div className={styles.formActions}>
-        <button type="submit" className={styles.button} disabled={busy || !values.name.trim()}>
+        <button type="submit" className={styles.button} disabled={busy || !values.name.trim() || Boolean(rateError)}>
           {busy ? "Saving…" : submitLabel}
         </button>
         {onCancel ? (

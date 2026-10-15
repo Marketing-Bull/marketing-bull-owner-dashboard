@@ -598,6 +598,23 @@
   padding: 22px;
 }
 
+.sheetError {
+  margin: 0;
+  padding: 10px 20px;
+  border-top: 1px solid color-mix(in srgb, var(--danger) 24%, transparent);
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel-strong));
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.dialogError {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .sheetFooter {
   display: flex;
   gap: 10px;

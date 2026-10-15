@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { createClient, createProject, updateClient } from "@/lib/entities";
+import { createClient, createProject, updateClient, updateProject } from "@/lib/entities";
 import { runMigrations } from "@/lib/migrations";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
 import {
@@ -254,5 +254,64 @@ describe("time entries", () => {
     expect(resolveLocalToday("2026-02-30", "2026-03-01")).toBe("2026-03-01");
     expect(resolveLocalToday("2026-03-02", "2026-03-01")).toBe("2026-03-02");
     expect(resolveLocalToday("2026-03-03", "2026-03-01")).toBe("2026-03-01");
+  });
+});
+
+describe("audit fixes: edits keep what was saved", () => {
+  it("does not re-rate a details-only edit after the project gains a client", () => {
+    const db = freshDb();
+    const project = createProject(db, { name: "Solo", hourlyRateOverride: 50 });
+    const entry = createTimeEntry(db, { projectId: project.id, date: "2026-08-13", hours: 1 });
+    expect(entry.rate).toBe(50);
+
+    const client = createClient(db, { name: "Later", hourlyRate: 120 });
+    updateProject(db, project.id, { clientId: client.id, hourlyRateOverride: 80 });
+
+    const edited = updateTimeEntry(db, entry.id, { clientId: null, projectId: project.id, details: "Typo fix" });
+    expect(edited.rate).toBe(50);
+    expect(edited.details).toBe("Typo fix");
+  });
+
+  it("keeps old rows editable after their project moves to another client", () => {
+    const db = freshDb();
+    const first = createClient(db, { name: "First", hourlyRate: 90 });
+    const second = createClient(db, { name: "Second", hourlyRate: 200 });
+    const project = createProject(db, { name: "Moved", clientId: first.id });
+    const entry = createTimeEntry(db, { projectId: project.id, date: "2026-08-13", hours: 1 });
+
+    updateProject(db, project.id, { clientId: second.id });
+    const edited = updateTimeEntry(db, entry.id, {
+      clientId: first.id,
+      projectId: project.id,
+      details: "Still editable"
+    });
+    expect(edited.details).toBe("Still editable");
+    expect(edited.rate).toBe(90);
+  });
+
+  it("picks up the current rate when a billable entry was frozen at $0", () => {
+    const db = freshDb();
+    const client = createClient(db, { name: "No rate yet" });
+    const entry = createTimeEntry(db, { clientId: client.id, date: "2026-08-13", hours: 2 });
+    expect(entry.rate).toBe(0);
+
+    updateClient(db, client.id, { hourlyRate: 120 });
+    expect(updateTimeEntry(db, entry.id, { details: "Re-save" }).rate).toBe(120);
+  });
+
+  it("saves edited start and end clocks, and clears them", () => {
+    const db = freshDb();
+    const entry = createTimeEntry(db, {
+      date: "2026-08-13",
+      hours: 1,
+      startTime: "09:00",
+      endTime: "10:00"
+    });
+    const edited = updateTimeEntry(db, entry.id, { hours: 3, startTime: "22:00", endTime: "01:00" });
+    expect(edited).toMatchObject({ hours: 3, startTime: "22:00", endTime: "01:00" });
+    expect(updateTimeEntry(db, entry.id, { startTime: null, endTime: null })).toMatchObject({
+      startTime: null,
+      endTime: null
+    });
   });
 });

@@ -617,9 +617,11 @@ function importMissionControlRows(mc: DatabaseSync, dash: DatabaseSync): ImportS
   if (unmappedExpenseRows) warnings.push(`${unmappedExpenseRows} source rows had no category/account mapping; account code left unset`);
   if (omittedReceiptPaths) warnings.push(`${omittedReceiptPaths} source receipt paths were not copied; attach the files again in this app`);
 
+  // The rate goes in before the trips: each new trip freezes the rate in force
+  // when it is created, so imported trips must see Mission Control's rate.
   const mileageSetting = mc.prepare("SELECT value FROM settings WHERE key='mileage_rate'").get() as { value?: unknown } | undefined;
   const mileageRate = num(mileageSetting?.value);
-  if (mileageRate != null && mileageRate > 0 && mileageRate <= 5) {
+  if (mileageRate != null && mileageRate >= 0 && mileageRate <= 10) {
     setMileageRate(dash, mileageRate);
     settings.updated += 1;
   } else {

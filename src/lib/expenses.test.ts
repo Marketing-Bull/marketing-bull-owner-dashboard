@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { createClient, createProject } from "@/lib/entities";
+import { createClient, createProject, updateProject } from "@/lib/entities";
 import {
   annualizeExpense,
   createExpense,
@@ -59,7 +59,7 @@ describe("expenses", () => {
     expect(expense.clientId).toBe(client.id);
     expect(income.kind).toBe("income");
     expect(expense.paid).toBe(false);
-    expect(income.paid).toBe(false);
+    expect(income.paid).toBe(true);
     expect(getExpenseSummary(db)).toEqual({ expenses: 25, income: 100, reimbursable: 0, unpaid: 25 });
     expect(() => createExpense(db, { clientId: other.id, projectId: project.id, date: "2026-08-13", amount: 1, category: "Other" })).toThrow(/different client/i);
     expect(() => createExpense(db, { date: "2026-08-13", amount: 1, category: "Other", accountCode: "9999" })).toThrow(/does not exist/i);
@@ -190,5 +190,27 @@ describe("expenses", () => {
     ) VALUES ('legacy-1', '2026-01-01', 5, 'expense', 'Office', '', '', '', 0, 0, 1, NULL,
       'none', '', '', '', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`).run();
     expect(getExpense(db, "legacy-1")?.paid).toBe(true);
+  });
+});
+
+describe("audit fixes: paid default and moved projects", () => {
+  it("starts income paid and expenses due", () => {
+    const db = freshDb();
+    const income = createExpense(db, { date: "2026-08-13", amount: 500, category: "Sales", kind: "income" });
+    const expense = createExpense(db, { date: "2026-08-13", amount: 50, category: "Software" });
+    expect(income.paid).toBe(true);
+    expect(expense.paid).toBe(false);
+  });
+
+  it("keeps an expense editable after its project moves to another client", () => {
+    const db = freshDb();
+    const first = createClient(db, { name: "First" });
+    const second = createClient(db, { name: "Second" });
+    const project = createProject(db, { name: "Moved", clientId: first.id });
+    const expense = createExpense(db, { date: "2026-08-13", amount: 50, category: "Software", projectId: project.id });
+
+    updateProject(db, project.id, { clientId: second.id });
+    expect(updateExpense(db, expense.id, { paid: true }).paid).toBe(true);
+    expect(() => updateExpense(db, expense.id, { clientId: first.id, projectId: null })).not.toThrow();
   });
 });

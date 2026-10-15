@@ -169,7 +169,8 @@ function rowToTimeEntry(row: Row): TimeEntry {
 function resolveRelations(
   db: DatabaseSync,
   clientIdValue: unknown,
-  projectIdValue: unknown
+  projectIdValue: unknown,
+  existing?: { clientId: string | null; projectId: string | null }
 ): {
   clientId: string | null;
   projectId: string | null;
@@ -178,6 +179,16 @@ function resolveRelations(
 } {
   const requestedClientId = relationId(clientIdValue, "Client");
   const projectId = relationId(projectIdValue, "Project");
+  // An edit that leaves the pair as stored keeps it, even if the project has
+  // since moved to another client; otherwise those rows could never be saved.
+  if (existing && requestedClientId === existing.clientId && projectId === existing.projectId) {
+    return {
+      clientId: existing.clientId,
+      projectId: existing.projectId,
+      client: existing.clientId ? getClient(db, existing.clientId) : null,
+      project: existing.projectId ? getProject(db, existing.projectId) : null
+    };
+  }
   const project = projectId ? getProject(db, projectId) : null;
   if (projectId && !project) throw new TimeEntryValidationError("That project does not exist.");
 
@@ -445,14 +456,18 @@ export function updateTimeEntry(
   const relations = resolveRelations(
     db,
     patch.clientId === undefined ? existing.clientId : patch.clientId,
-    patch.projectId === undefined ? existing.projectId : patch.projectId
+    patch.projectId === undefined ? existing.projectId : patch.projectId,
+    existing
   );
   const relationChanged =
     relations.clientId !== existing.clientId || relations.projectId !== existing.projectId;
+  // The rate stays frozen unless the entry moves to another client/project.
+  // A billable entry frozen at $0 (no rate was set at the time) picks up the
+  // current rate on re-save, which is what the $0-billable alert asks for.
   const rate =
     patch.frozenRate !== undefined
       ? validatedRate(patch.frozenRate)
-      : relationChanged
+      : relationChanged || (existing.rate === 0 && existing.billable)
         ? resolveHourlyRate(relations.project, relations.client)
         : existing.rate;
 

@@ -109,7 +109,7 @@ describe("existing database without daily_history", () => {
       "009-mileage-maps",
       "010-dropdown-options",
       "011-expense-paid",
-      "012-mileage-entry-rate"
+      "012-mileage-rate"
     ]);
     upgraded.close();
 

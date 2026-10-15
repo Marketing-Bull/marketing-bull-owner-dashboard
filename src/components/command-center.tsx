@@ -811,15 +811,27 @@ export function CommandCenter() {
 
     if (tasks.status === "fulfilled" && tasks.value.ok) {
       const normalized = normalizeDashboardData(await tasks.value.json());
-      next.tasks = normalized.upNext.filter((task) => !task.done).slice(0, 5);
       next.sync = normalized.clickUpSync;
+      // The route answers 200 with sample tasks when ClickUp fails and nothing
+      // is cached. Those must never pass for the owner's real queue.
+      if (normalized.source === "live") {
+        next.tasks = normalized.upNext.filter((task) => !task.done).slice(0, 5);
+      } else {
+        next.taskError = "ClickUp is not answering right now, so no tasks are shown.";
+      }
     } else {
       next.taskError = "ClickUp is not answering right now.";
     }
 
     if (calendar.status === "fulfilled" && calendar.value.ok) {
-      const payload = (await calendar.value.json()) as { upcomingEvents?: CalendarEvent[] };
-      next.events = Array.isArray(payload.upcomingEvents) ? payload.upcomingEvents : [];
+      const payload = (await calendar.value.json()) as { upcomingEvents?: CalendarEvent[]; source?: string };
+      // Sample events are stamped with today's date; showing them would invent
+      // meetings. A cached local copy is still the owner's real calendar.
+      if (payload.source === "sample") {
+        next.calendarError = "Calendar is not answering right now, so no events are shown.";
+      } else {
+        next.events = Array.isArray(payload.upcomingEvents) ? payload.upcomingEvents : [];
+      }
     } else {
       next.calendarError = "Calendar is not answering right now.";
     }
@@ -956,13 +968,13 @@ export function CommandCenter() {
               label="Money in"
               value={money(cash.income)}
               delta={<Delta current={cash.income} previous={cash.previousIncome} />}
-              meta="recorded income"
+              meta="received (cash basis)"
             />
             <StatTile
               label="Money out"
               value={money(cash.expenses)}
               delta={<Delta current={cash.expenses} previous={cash.previousExpenses} goodWhenUp={false} />}
-              meta="recorded spend"
+              meta={cash.dueCount > 0 ? `paid out · ${money(cash.due)} still due` : "paid out (cash basis)"}
             />
             <StatTile
               label="Committed MRR"
@@ -1144,7 +1156,7 @@ export function CommandCenter() {
 
             <Card
               title={`Deductions ${tax.year}`}
-              subtitle="Calendar year, whatever period is selected above"
+              subtitle="Year to date, cash basis: paid bills only, whatever period is selected above"
               action={
                 <Link href="/expenses" className={styles.ghostButton}>
                   Expenses

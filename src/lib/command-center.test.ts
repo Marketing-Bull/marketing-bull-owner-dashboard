@@ -22,6 +22,7 @@ import {
   type ClientRollup,
   type ProjectRollup
 } from "@/lib/command-center";
+import { createRecurringExpense } from "@/lib/expenses";
 import { runMigrations } from "@/lib/migrations";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
 
@@ -126,11 +127,14 @@ function addExpense(
     accountCode?: string | null;
     receiptPath?: string | null;
     reimbursable?: number;
+    paid?: number;
+    paidOn?: string | null;
   }
 ): void {
   db.prepare(
-    `INSERT INTO expenses (id, client_id, date, amount, kind, category, account_code, receipt_path, reimbursable, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO expenses (id, client_id, date, amount, kind, category, account_code, receipt_path, reimbursable,
+                           paid, paid_on, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     `e-${Math.random().toString(36).slice(2)}`,
     patch.clientId ?? null,
@@ -141,6 +145,8 @@ function addExpense(
     patch.accountCode ?? null,
     patch.receiptPath ?? null,
     patch.reimbursable ?? 0,
+    patch.paid ?? 1,
+    patch.paidOn ?? null,
     NOW,
     NOW
   );
@@ -154,16 +160,20 @@ function addAccount(db: DatabaseSync, accountCode: string, scheduleCLine = "Line
   ).run(accountCode, "Software", scheduleCLine, NOW, NOW);
 }
 
-function addTrip(db: DatabaseSync, patch: { date: string; miles: number; billable?: number; clientId?: string }): void {
+function addTrip(
+  db: DatabaseSync,
+  patch: { date: string; miles: number; billable?: number; clientId?: string; rate?: number }
+): void {
   db.prepare(
-    `INSERT INTO mileage_entries (id, client_id, date, miles, round_trip, total_miles, billable, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`
+    `INSERT INTO mileage_entries (id, client_id, date, miles, round_trip, total_miles, rate, billable, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
   ).run(
     `m-${Math.random().toString(36).slice(2)}`,
     patch.clientId ?? null,
     patch.date,
     patch.miles,
     patch.miles,
+    patch.rate ?? 0.67,
     patch.billable ?? 0,
     NOW,
     NOW
@@ -255,8 +265,8 @@ describe("buildCommandCenter", () => {
     expect(october?.expenses).toBe(170);
     expect(payload.tax.deductible).toBe(170);
     expect(payload.tax.lines.reduce((total, line) => total + line.amount, 0)).toBe(170);
-    expect(payload.attention.find((item) => item.id === "due-expenses")).toMatchObject({
-      href: "/expenses?paid=false",
+    expect(payload.attention.find((item) => item.id === "accounts-payable")).toMatchObject({
+      href: "/expenses?kind=expense&paid=false",
       amount: 5000
     });
   });
@@ -489,6 +499,7 @@ describe("buildAttention", () => {
     missingReceiptCount: 0,
     missingReceiptAmount: 0,
     mileageMiles: 0,
+    mileageRate: 0.67,
     mileageDeduction: 0,
     lines: []
   };
@@ -512,6 +523,7 @@ describe("buildAttention", () => {
     previousNet: 0,
     committedMrr: 0,
     mrrClients: 0,
+    dueCount: 0,
     fixedMonthlyCost: 0,
     recurringCount: 0,
     fixedCoverage: null
@@ -629,5 +641,123 @@ describe("buildAttention", () => {
     expect(run({ projects: [project({ urgent: true, hours: 0 })] })).toEqual([]);
     const items = run({ projects: [project({ urgent: true, important: true, hours: 0 })] });
     expect(items.find((entry) => entry.id === "focus-untouched")?.count).toBe(1);
+  });
+});
+
+describe("audit fixes: committed MRR and fixed cost", () => {
+  it("counts only retainer clients toward committed MRR and retainer coverage", () => {
+    const db = freshDb();
+    addClient(db, "retainer", { name: "Retainer", mrr: 2000, paymentType: "mrr" });
+    // Switched to hourly but still carrying an old MRR value.
+    addClient(db, "hourly", { name: "Hourly", mrr: 3000, paymentType: "hourly" });
+    addTime(db, { date: "2026-08-04", hours: 20, rate: 150, clientId: "hourly" });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.committedMrr).toBe(2000);
+    const hourly = payload.clients.find((client) => client.id === "hourly");
+    expect(hourly?.retainerCoverage).toBeNull();
+  });
+
+  it("leaves recurring costs that have ended or not started out of fixed monthly cost", () => {
+    const db = freshDb();
+    const base = { category: "Software", frequency: "monthly" as const };
+    createRecurringExpense(db, { ...base, description: "Live", amount: 100, startDate: "2026-01-01" });
+    createRecurringExpense(db, {
+      ...base,
+      description: "Ended",
+      amount: 500,
+      startDate: "2024-01-01",
+      endDate: "2025-06-30"
+    });
+    createRecurringExpense(db, { ...base, description: "Future lease", amount: 2000, startDate: "2027-06-01" });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.fixedMonthlyCost).toBe(100);
+  });
+});
+
+describe("cash basis", () => {
+  it("counts only paid bills as money out and reports the rest as due", () => {
+    const db = freshDb();
+    addExpense(db, { date: "2026-08-04", amount: 5000, paid: 0 });
+    addExpense(db, { date: "2026-08-05", amount: 100 });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.expenses).toBe(100);
+    expect(payload.money.due).toBe(5000);
+    expect(payload.money.dueCount).toBe(1);
+    expect(payload.trend[11].expenses).toBe(100);
+    expect(payload.tax.deductible).toBe(100);
+
+    const due = payload.attention.find((item) => item.id === "accounts-payable");
+    expect(due).toMatchObject({ count: 1, amount: 5000, href: "/expenses?kind=expense&paid=false" });
+  });
+
+  it("dates a paid bill by when it was paid, not when it was billed", () => {
+    const db = freshDb();
+    addExpense(db, { date: "2026-07-30", amount: 400, paidOn: "2026-08-02" });
+
+    const august = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(august.money.expenses).toBe(400);
+    expect(august.trend[11].expenses).toBe(400);
+    expect(august.trend[10].expenses).toBe(0);
+
+    const july = buildCommandCenter(db, { period: "last-month", today: "2026-08-13" });
+    expect(july.money.expenses).toBe(0);
+  });
+
+  it("leaves unpaid income out of money in and client income", () => {
+    const db = freshDb();
+    addClient(db, "c1", { name: "Acme" });
+    addExpense(db, { date: "2026-08-03", amount: 2000, kind: "income", clientId: "c1", paid: 0 });
+    addExpense(db, { date: "2026-08-04", amount: 700, kind: "income", clientId: "c1" });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.income).toBe(700);
+    expect(payload.clients[0].income).toBe(700);
+    // Receivables are not payables.
+    expect(payload.money.due).toBe(0);
+  });
+
+  it("keeps future-dated rows out of this month's bar and the tax year", () => {
+    const db = freshDb();
+    addExpense(db, { date: "2026-08-05", amount: 100 });
+    addExpense(db, { date: "2026-08-28", amount: 900 });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.expenses).toBe(100);
+    expect(payload.trend[11].expenses).toBe(100);
+    expect(payload.tax.deductible).toBe(100);
+  });
+
+  it("raises no payables item when nothing is due", () => {
+    const db = freshDb();
+    addExpense(db, { date: "2026-08-05", amount: 100 });
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.due).toBe(0);
+    expect(payload.attention.some((item) => item.id === "accounts-payable")).toBe(false);
+  });
+});
+
+describe("per-trip mileage rate", () => {
+  it("values each trip at its own frozen rate and does not round miles first", () => {
+    const db = freshDb();
+    addTrip(db, { date: "2026-08-04", miles: 37.02, billable: 1, rate: 0.7 });
+    addTrip(db, { date: "2026-08-05", miles: 100, billable: 1, rate: 0.655 });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    // 37.02 x 0.70 = 25.914 and 100 x 0.655 = 65.5; rounding miles first gave 25.90.
+    expect(payload.reimbursable.mileageAmount).toBe(91.41);
+    expect(payload.tax.mileageDeduction).toBe(91.41);
+    expect(payload.reimbursable.mileageRate).toBeCloseTo(91.414 / 137.02, 3);
+  });
+
+  it("is unaffected by a later change to the rate setting", () => {
+    const db = freshDb();
+    addTrip(db, { date: "2026-08-04", miles: 100, billable: 1, rate: 0.655 });
+    db.prepare("UPDATE app_settings SET value = '0.9' WHERE key = 'mileage.rate'").run();
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.reimbursable.mileageAmount).toBe(65.5);
   });
 });

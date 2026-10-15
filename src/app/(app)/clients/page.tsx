@@ -11,6 +11,7 @@ import { LoaderCircle, Plus } from "lucide-react";
 import { DeleteDialog } from "@/components/transactions/delete-dialog";
 import styles from "../entities.module.css";
 import { CLIENT_STATUSES, PAYMENT_TYPES, type Client, type ClientStatus, type PaymentType } from "@/lib/types";
+import { parseMoneyInput } from "@/lib/money-input";
 
 function redirectedToLogin(response: Response): boolean {
   if (response.status !== 401) return false;
@@ -78,8 +79,8 @@ function toPayload(form: FormValues) {
     name: form.name,
     status: form.status,
     paymentType: form.paymentType,
-    mrr: form.mrr.trim() === "" ? null : Number(form.mrr),
-    hourlyRate: form.hourlyRate.trim() === "" ? null : Number(form.hourlyRate),
+    mrr: parseMoneyInput(form.mrr).value,
+    hourlyRate: parseMoneyInput(form.hourlyRate).value,
     contactName: form.contactName,
     contactEmail: form.contactEmail,
     contactPhone: form.contactPhone,
@@ -105,12 +106,15 @@ function ClientForm({
   const [values, setValues] = useState<FormValues>(initial);
   const set = (key: keyof FormValues) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setValues((current) => ({ ...current, [key]: event.target.value }));
+  const mrrError = parseMoneyInput(values.mrr, "MRR").error;
+  const rateError = parseMoneyInput(values.hourlyRate, "Hourly rate").error;
 
   return (
     <form
       className={styles.form}
       onSubmit={(event) => {
         event.preventDefault();
+        if (mrrError || rateError) return;
         onSubmit(values);
       }}
     >
@@ -136,11 +140,13 @@ function ClientForm({
       </label>
       <label className={styles.field}>
         <span className={styles.label}>MRR ($/mo)</span>
-        <input className={styles.input} inputMode="decimal" value={values.mrr} onChange={set("mrr")} />
+        <input className={styles.input} inputMode="decimal" value={values.mrr} onChange={set("mrr")} aria-invalid={Boolean(mrrError)} />
+        {mrrError ? <span className={styles.fieldError} role="alert">{mrrError}</span> : null}
       </label>
       <label className={styles.field}>
         <span className={styles.label}>Hourly rate ($)</span>
-        <input className={styles.input} inputMode="decimal" value={values.hourlyRate} onChange={set("hourlyRate")} />
+        <input className={styles.input} inputMode="decimal" value={values.hourlyRate} onChange={set("hourlyRate")} aria-invalid={Boolean(rateError)} />
+        {rateError ? <span className={styles.fieldError} role="alert">{rateError}</span> : null}
       </label>
       <label className={styles.field}>
         <span className={styles.label}>Contact name</span>
@@ -167,7 +173,7 @@ function ClientForm({
         <textarea className={styles.textarea} value={values.notes} onChange={set("notes")} />
       </label>
       <div className={styles.formActions}>
-        <button type="submit" className={styles.button} disabled={busy || !values.name.trim()}>
+        <button type="submit" className={styles.button} disabled={busy || !values.name.trim() || Boolean(mrrError || rateError)}>
           {busy ? "Saving…" : submitLabel}
         </button>
         {onCancel ? (

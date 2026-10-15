@@ -440,22 +440,19 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
     }
   },
   {
-    // Reimbursement rates are snapshots on each trip so changing the current
-    // setting cannot restate previously recorded deductions.
-    id: "012-mileage-entry-rate",
+    // Each trip keeps the reimbursement rate in force when it was logged, the
+    // way a time entry freezes its hourly rate, so changing the setting never
+    // restates past years. Existing trips take today's setting, read with the
+    // same rules as getMileageRate (anything unusable falls back to 0.67).
+    id: "012-mileage-rate",
     up: (db) => {
-      db.exec(`
-        ALTER TABLE mileage_entries ADD COLUMN rate REAL NOT NULL DEFAULT 0.67;
-        UPDATE mileage_entries
-        SET rate = COALESCE(
-          (SELECT CASE
-            WHEN CAST(value AS REAL) > 0 AND CAST(value AS REAL) <= 5
-            THEN CAST(value AS REAL)
-            ELSE NULL
-          END FROM app_settings WHERE key = 'mileage.rate'),
-          0.67
-        );
-      `);
+      db.exec("ALTER TABLE mileage_entries ADD COLUMN rate REAL NOT NULL DEFAULT 0.67 CHECK (rate >= 0);");
+      const row = db.prepare("SELECT value FROM app_settings WHERE key = 'mileage.rate'").get() as
+        | { value?: unknown }
+        | undefined;
+      const setting = Number(row?.value);
+      const rate = Number.isFinite(setting) && setting >= 0 ? setting : 0.67;
+      db.prepare("UPDATE mileage_entries SET rate = ?").run(rate);
     }
   }
 ];

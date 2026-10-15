@@ -243,6 +243,7 @@ export type MileageEntry = {
   miles: number;
   roundTrip: boolean;
   totalMiles: number;
+  /** Reimbursement $/mile frozen when the trip was logged; never re-read from the setting. */
   rate: number;
   billable: boolean;
   notes: string;
