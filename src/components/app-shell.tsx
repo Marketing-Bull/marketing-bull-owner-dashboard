@@ -71,18 +71,31 @@ const SECTIONS: NavSection[] = [
   {
     label: "System",
     items: [{ href: "/settings", label: "Settings", icon: <Settings size={16} /> }]
-  },
-  {
-    label: "External",
-    items: [
-      // FIXME: both are hardcoded Tailscale addresses — dead links off the
-      // tailnet. Same standing note as before the shell; move to env when
-      // this stops being a single-owner app on one machine.
-      { href: "http://100.119.59.63:3333/tasks", label: "ClickUp board", icon: <ListTodo size={16} />, external: true },
-      { href: "http://100.82.222.18:9119/chat", label: "Hermes", icon: <MessageSquare size={16} />, external: true }
-    ]
   }
 ];
+
+// Outbound links are configured per deployment. Each link is hidden when its
+// env var is unset, and the External section is hidden when none are set.
+// NEXT_PUBLIC_* values are inlined at build time, so they must be referenced
+// directly (no dynamic lookup) and a rebuild is needed after changing them.
+const EXTERNAL_ITEMS: NavItem[] = [
+  {
+    href: process.env.NEXT_PUBLIC_EXTERNAL_TASKS_URL?.trim() ?? "",
+    label: "Mission Control tasks",
+    icon: <ListTodo size={16} />,
+    external: true
+  },
+  {
+    href: process.env.NEXT_PUBLIC_HERMES_URL?.trim() ?? "",
+    label: "Hermes",
+    icon: <MessageSquare size={16} />,
+    external: true
+  }
+].filter((item) => item.href.length > 0);
+
+if (EXTERNAL_ITEMS.length > 0) {
+  SECTIONS.push({ label: "External", items: EXTERNAL_ITEMS });
+}
 
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") return pathname === "/";
