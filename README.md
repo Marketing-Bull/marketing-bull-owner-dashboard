@@ -125,6 +125,11 @@ The reading order is the order the questions actually get asked:
 | Today | What is on today? | `time_entries` for today, Google Calendar, ClickUp |
 | Deductions | What do I owe the IRS? | `expenses` x `chart_accounts`, `mileage_entries` x rate |
 
+Command Center income and expenses use **cash basis**: only paid records count,
+and a payment is dated by `paid_on` when present (otherwise by its transaction
+date). Unpaid bills appear separately as Due (AP), and future-dated activity is
+excluded from current-period and tax-year figures.
+
 ### Periods and comparisons
 
 One control drives the whole screen: `Month to date`, `Last month`,
@@ -181,6 +186,12 @@ projections, goals, client contact details and rates. An unconfigured
 deployment quietly serving all of that is the failure mode; now it cannot —
 running open has to be said out loud.
 
+The proxy also validates the request Host and rejects cross-origin API writes.
+`OWNER_DASHBOARD_ALLOWED_HOSTS` accepts a comma-separated list of hostnames,
+optionally with ports. Localhost and `127.0.0.1` are always allowed; the current
+Tailscale host is included in the default list. Set this variable when serving
+the app on another hostname.
+
 **Current posture: said out loud.** The repo commits a `.env` with
 `OWNER_DASHBOARD_ALLOW_UNPROTECTED=1`, by the owner's explicit choice: deploys
 are `git pull` + restart with no login step, and the header wears the
@@ -199,7 +210,11 @@ The token is a shared secret you invent — nothing issues it. Generate one with
 `openssl rand -base64 32`. Under systemd, put it in the unit
 (`Environment="OWNER_DASHBOARD_AUTH_TOKEN=..."`) instead, since `.env.local` is
 only picked up when the process runs from the project root. Under pm2, restart
-with `--update-env`.
+with `--update-env`. For deployments in Eastern Time, also set
+`Environment="TZ=America/New_York"` in the systemd unit. The dashboard sends the
+browser's local calendar day for its date windows, but setting the process
+timezone keeps server-side date handling consistent for scheduled jobs and
+other callers.
 
 Scripted access once it is set:
 
@@ -317,6 +332,7 @@ without credentials means the explicit opt-out is active.
 ### `GET /api/calendar`
 - If `OWNER_DASHBOARD_CALENDAR_URL` is set, proxies that upstream endpoint
 - Otherwise pulls live Google Calendar data through local `gog` (`~/.local/bin/gog`)
+- The `--days=5` window is set in `src/app/api/calendar/route.ts`; change it there to widen or shorten the calendar horizon
 - Falls back to local/sample data only if live fetch fails, reporting `fallbackReason` the same way
 
 ## Current Persistence
@@ -417,7 +433,7 @@ tables, and its anon key cannot read a row of this schema.
 **One-time setup**
 
 1. ~~Apply [`supabase/owner-dashboard-mirror.sql`](supabase/owner-dashboard-mirror.sql)~~
-   — done on 2026-08-14; all 14 tables exist with RLS enabled. The file is
+   — done on 2026-08-14; all mirrored tables exist with RLS enabled. The file is
    idempotent, so re-running it against a replacement project is safe.
 2. Add `owner_dashboard` to Project Settings → API → **Exposed schemas**, or
    PostgREST answers `PGRST106` and the script says so in as many words.
@@ -444,8 +460,8 @@ Nightly, after the dashboard has settled:
 
 **What it does and does not carry**
 
-- Every entity, ledger, accounting reference, and the hand-typed daily state —
-  including `daily_history`, which exists nowhere else.
+- Every entity, ledger, accounting reference, dropdown options, and the hand-
+  typed daily state — including `daily_history`, which exists nowhere else.
 - Deletions propagate. Each run stamps every row with one `synced_at`; rows in
   the mirror older than that stamp are gone from the source and are removed —
   but only after that table's writes have all succeeded, so an interrupted run

@@ -116,6 +116,15 @@ describe("clients", () => {
     expect(updated.notes).toBe("original");
     expect(updated.name).toBe("Acme");
   });
+
+  it("rejects spoofed archive flags and malformed project client ids", () => {
+    const db = freshDb();
+    const client = createClient(db, { name: "Acme" });
+    const project = createProject(db, { name: "Site" });
+    expect(() => updateClient(db, client.id, { isArchived: "false" as never })).toThrow(EntityValidationError);
+    expect(() => createProject(db, { name: "Bad", clientId: { x: 1 } as never })).toThrow(/client id/i);
+    expect(() => updateProject(db, project.id, { urgent: "false" as never })).toThrow(/urgent/i);
+  });
 });
 
 describe("projects", () => {

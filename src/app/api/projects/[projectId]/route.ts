@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDatabase } from "@/lib/dashboard-state";
-import { EntityValidationError, getProject, updateProject } from "@/lib/entities";
+import { EntityValidationError, getProject, updateProject, type ProjectInput } from "@/lib/entities";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +17,22 @@ export async function PUT(request: Request, context: Context) {
   const { projectId } = await context.params;
   try {
     const body = await request.json().catch(() => null);
-    if (!body || typeof body !== "object") {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
       return NextResponse.json({ error: "Expected a JSON body." }, { status: 400 });
     }
-    const project = updateProject(getDatabase(), projectId, body);
+    const input = body as Record<string, unknown>;
+    const patch = {
+      name: input.name,
+      clientId: input.clientId,
+      description: input.description,
+      hourlyRateOverride: input.hourlyRateOverride,
+      status: input.status,
+      notes: input.notes,
+      urgent: input.urgent,
+      important: input.important,
+      isArchived: input.isArchived
+    } as Partial<ProjectInput> & { isArchived?: boolean };
+    const project = updateProject(getDatabase(), projectId, patch);
     return NextResponse.json({ project }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof EntityValidationError) {

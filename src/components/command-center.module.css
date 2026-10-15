@@ -974,6 +974,19 @@
   white-space: nowrap;
 }
 
+.feedFree {
+  color: var(--muted);
+  opacity: 0.68;
+}
+
+.freeTag {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .feedTitle a {
   display: inline-flex;
   align-items: center;

@@ -6,7 +6,8 @@ const PROVIDER = "openrouteservice";
 const GEOCODE_URL = "https://api.openrouteservice.org/geocode";
 const DIRECTIONS_URL = "https://api.openrouteservice.org/v2/directions/driving-car";
 const CACHE_MS = 30 * 24 * 60 * 60 * 1000;
-const buckets = new Map<string, { count: number; resetAt: number }>();
+type MapsRateLimitRoute = "autocomplete" | "distance";
+const buckets = new Map<MapsRateLimitRoute, { count: number; resetAt: number }>();
 
 export class MapsError extends Error {
   constructor(
@@ -26,9 +27,13 @@ export function getMapsStatus(db: DatabaseSync) {
   return { provider: PROVIDER, ...getStoredMapsApiKeySummary(db) };
 }
 
-export function assertMapsRateLimit(key: string): void {
-  const now = Date.now(); const bucket = buckets.get(key);
-  if (!bucket || bucket.resetAt <= now) { buckets.set(key, { count: 1, resetAt: now + 60_000 }); return; }
+export function assertMapsRateLimit(route: MapsRateLimitRoute): void {
+  const now = Date.now();
+  for (const [key, bucket] of buckets) {
+    if (bucket.resetAt <= now) buckets.delete(key);
+  }
+  const bucket = buckets.get(route);
+  if (!bucket) { buckets.set(route, { count: 1, resetAt: now + 60_000 }); return; }
   if (bucket.count >= 30) throw new MapsError("Too many route requests. Try again in a minute.", "rate_limited");
   bucket.count += 1;
 }

@@ -35,9 +35,9 @@ describe("normalizeDashboardData", () => {
       const result = normalizeDashboardData(input);
 
       // These are precisely the accesses the component makes unguarded.
-      expect(Array.isArray(result.hours.day)).toBe(true);
-      expect(Array.isArray(result.hours.week)).toBe(true);
-      expect(Array.isArray(result.hours.month)).toBe(true);
+      expect(Array.isArray(result.hours.day.entries)).toBe(true);
+      expect(Array.isArray(result.hours.week.entries)).toBe(true);
+      expect(Array.isArray(result.hours.month.entries)).toBe(true);
       expect(Array.isArray(result.upNext)).toBe(true);
       expect(Array.isArray(result.priorities)).toBe(true);
       expect(() => result.priorities.map((bucket) => bucket.projects.length)).not.toThrow();
@@ -61,8 +61,8 @@ describe("normalizeDashboardData", () => {
     expect(result.priorities[0].projects).toEqual([
       { id: "a", title: "Ship it", subtitle: undefined, status: undefined, href: "https://x" }
     ]);
-    expect(result.hours.week).toEqual([{ label: "Dashboard", hours: 6.5 }]);
-    expect(result.hours.day).toEqual([{ label: "Dashboard", hours: 1 }]);
+    expect(result.hours.week).toEqual({ entries: [{ label: "Dashboard", hours: 6.5 }], totalHours: 6.5 });
+    expect(result.hours.day).toEqual({ entries: [{ label: "Dashboard", hours: 1 }], totalHours: 1 });
     expect(result.upNext[0]).toMatchObject({ id: "t1", priority: "P1", done: true });
     expect(result.source).toBe("live");
     expect(result.generatedAt).toBe(1_700_000_000_000);
@@ -101,7 +101,19 @@ describe("normalizeDashboardData", () => {
 
   it("coerces unusable numbers rather than rendering NaN", () => {
     const result = normalizeDashboardData({ hours: { week: [{ label: "Admin", hours: "lots" }], month: [] } });
-    expect(result.hours.week).toEqual([{ label: "Admin", hours: 0 }]);
+    expect(result.hours.week.entries).toEqual([{ label: "Admin", hours: 0 }]);
+  });
+
+  it("keeps explicit total hours and derives a backward-compatible total for legacy arrays", () => {
+    const current = normalizeDashboardData({
+      hours: { week: { entries: [{ label: "A", hours: 4 }], totalHours: 12 } }
+    });
+    const legacy = normalizeDashboardData({
+      hours: { week: [{ label: "A", hours: 4 }, { label: "B", hours: 3 }] }
+    });
+
+    expect(current.hours.week.totalHours).toBe(12);
+    expect(legacy.hours.week.totalHours).toBe(7);
   });
 
   it("falls back to P3 for an unrecognised priority", () => {

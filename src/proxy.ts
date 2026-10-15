@@ -6,6 +6,9 @@ import {
   isPublicPath,
   readBearerToken
 } from "@/lib/auth";
+import { guardRequest } from "@/lib/request-guard";
+
+let warnedAboutAllowedHosts = false;
 
 /**
  * Gates the dashboard and every private API route.
@@ -23,6 +26,17 @@ import {
  */
 export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  if (!process.env.OWNER_DASHBOARD_ALLOWED_HOSTS && !warnedAboutAllowedHosts) {
+    console.warn("[owner-dashboard] OWNER_DASHBOARD_ALLOWED_HOSTS is unset; using localhost and the configured live Tailscale host defaults.");
+    warnedAboutAllowedHosts = true;
+  }
+  const guard = guardRequest(pathname.startsWith("/api/") ? request.method : "GET", pathname, request.headers.get("host"), request.headers);
+  if (!guard.allowed) {
+    return NextResponse.json({ error: guard.message }, {
+      status: guard.status,
+      headers: { "Cache-Control": "no-store" }
+    });
+  }
 
   if (isPublicPath(pathname)) {
     return NextResponse.next();

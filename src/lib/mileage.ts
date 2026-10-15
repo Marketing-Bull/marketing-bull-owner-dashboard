@@ -5,6 +5,7 @@ import { getClient, getProject, newEntityId } from "@/lib/entities";
 import { isDateKey } from "@/lib/time-entries";
 import {
   addInFilter,
+  addLocalDateRange,
   addLikeFilter,
   assertRange,
   booleanParam,
@@ -119,6 +120,12 @@ function nowIso(): string { return new Date().toISOString(); }
 function text(value: unknown): string { return typeof value === "string" ? value.trim() : ""; }
 
 function finiteNumber(value: unknown, label: string): number {
+  if (
+    typeof value !== "number" &&
+    (typeof value !== "string" || !/^-?\d+(?:\.\d+)?$/.test(value.trim()))
+  ) {
+    throw new MileageValidationError(`${label} must be a number.`);
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) throw new MileageValidationError(`${label} must be a number.`);
   return parsed;
@@ -158,7 +165,8 @@ function rowToMileage(row: Row): MileageEntry {
     projectId: row.project_id == null ? null : String(row.project_id),
     tripName: text(row.trip_name), date: String(row.date), startAddress: text(row.start_address),
     endAddress: text(row.end_address), purpose: text(row.purpose), miles: Number(row.miles),
-    roundTrip: Boolean(row.round_trip), totalMiles: Number(row.total_miles), billable: Boolean(row.billable),
+    roundTrip: Boolean(row.round_trip), totalMiles: Number(row.total_miles),
+    rate: Number(row.rate ?? DEFAULT_MILEAGE_RATE), billable: Boolean(row.billable),
     notes: typeof row.notes === "string" ? row.notes : "",
     calculationSource: row.calculation_source === "provider" ? "provider" : "manual",
     calculationProvider: row.calculation_provider == null ? null : String(row.calculation_provider),
@@ -178,6 +186,19 @@ function validated(db: DatabaseSync, input: MileageInput) {
   const totalMiles = mileageTotal(input.miles, roundTrip);
   if (input.billable !== undefined && typeof input.billable !== "boolean") {
     throw new MileageValidationError("Billable must be true or false.");
+  }
+  if (input.roundTrip !== undefined && typeof input.roundTrip !== "boolean") {
+    throw new MileageValidationError("Round trip must be true or false.");
+  }
+  if (input.routeMetadataJson !== undefined && input.routeMetadataJson !== null) {
+    if (typeof input.routeMetadataJson !== "string") {
+      throw new MileageValidationError("Route metadata must be a JSON string.");
+    }
+    try {
+      JSON.parse(input.routeMetadataJson);
+    } catch {
+      throw new MileageValidationError("Route metadata must be valid JSON.");
+    }
   }
   return { date, miles: finiteNumber(input.miles, "Miles"), roundTrip, totalMiles,
     ...resolveRelations(db, input.clientId, input.projectId) };
@@ -246,7 +267,7 @@ export function parseMileageQuery(params: URLSearchParams): MileageQuery {
   return query;
 }
 
-function mileageWhere(query: MileageQuery, rate: number): { where: string; params: QueryScalar[] } {
+function mileageWhere(query: MileageQuery): { where: string; params: QueryScalar[] } {
   const clauses: string[] = [];
   const params: QueryScalar[] = [];
   const exact = (column: string, value: QueryScalar | undefined) => {
@@ -264,7 +285,7 @@ function mileageWhere(query: MileageQuery, rate: number): { where: string; param
     clauses.push(`${column} <= ?`);
     params.push(value);
   };
-  const reimbursementSql = `(total_miles * ${rate})`;
+  const reimbursementSql = "(total_miles * rate)";
 
   exact("id", query.id);
   exact("mc_id", query.mcId);
@@ -291,10 +312,8 @@ function mileageWhere(query: MileageQuery, rate: number): { where: string; param
     "trip_name || ' ' || start_address || ' ' || end_address || ' ' || purpose || ' ' || notes",
     query.search
   );
-  minimum("SUBSTR(created_at, 1, 10)", query.createdFrom);
-  maximum("SUBSTR(created_at, 1, 10)", query.createdTo);
-  minimum("SUBSTR(updated_at, 1, 10)", query.updatedFrom);
-  maximum("SUBSTR(updated_at, 1, 10)", query.updatedTo);
+  addLocalDateRange(clauses, params, "created_at", query.createdFrom, query.createdTo);
+  addLocalDateRange(clauses, params, "updated_at", query.updatedFrom, query.updatedTo);
   return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
 
@@ -302,8 +321,7 @@ export function queryMileageEntries(
   db: DatabaseSync,
   query: MileageQuery
 ): TransactionQueryResult<MileageEntry, MileageQueryTotals, MileageQueryFacets> {
-  const rate = getMileageRate(db);
-  const { where, params } = mileageWhere(query, rate);
+  const { where, params } = mileageWhere(query);
   const totalItems = countRows(db, "mileage_entries", where, params);
   const sortColumns: Record<MileageSort, string> = {
     date: "date",
@@ -315,7 +333,7 @@ export function queryMileageEntries(
     roundTrip: "round_trip",
     totalMiles: "total_miles",
     billable: "billable",
-    reimbursement: `(total_miles * ${rate})`,
+    reimbursement: "(total_miles * rate)",
     createdAt: "created_at",
     updatedAt: "updated_at"
   };
@@ -324,8 +342,14 @@ export function queryMileageEntries(
   const rows = db.prepare(`SELECT * FROM mileage_entries ${where}
       ORDER BY ${sortColumns[query.sort]} ${direction}, created_at ${direction}, id ${direction}
       LIMIT ? OFFSET ?`).all(...params, query.pageSize, offset) as Row[];
-  const totals = db.prepare(`SELECT COUNT(*) AS entries, COALESCE(SUM(total_miles), 0) AS total_miles
-    FROM mileage_entries ${where}`).get(...params) as { entries: number; total_miles: number };
+  const totals = db.prepare(`SELECT COUNT(*) AS entries,
+    COALESCE(SUM(total_miles), 0) AS total_miles,
+    COALESCE(SUM(total_miles * rate), 0) AS reimbursement
+    FROM mileage_entries ${where}`).get(...params) as {
+      entries: number;
+      total_miles: number;
+      reimbursement: number;
+    };
   const totalMiles = Number(totals.total_miles);
   return {
     items: rows.map(rowToMileage),
@@ -333,7 +357,7 @@ export function queryMileageEntries(
     filteredTotals: {
       entries: Number(totals.entries),
       totalMiles,
-      reimbursement: Number((totalMiles * rate).toFixed(2))
+      reimbursement: Number(Number(totals.reimbursement).toFixed(2))
     },
     availableFacets: {
       clients: facetCounts(db, "mileage_entries", "COALESCE(client_id, '__unassigned__')", where, params),
@@ -351,12 +375,12 @@ export function createMileageEntry(db: DatabaseSync, input: MileageInput): Milea
   const now = nowIso();
   const calculationSource = input.calculationSource === "provider" ? "provider" : "manual";
   db.prepare(`INSERT INTO mileage_entries (id,mc_id,client_id,project_id,trip_name,date,start_address,
-    end_address,purpose,miles,round_trip,total_miles,billable,notes,calculation_source,calculation_provider,
+    end_address,purpose,miles,round_trip,total_miles,rate,billable,notes,calculation_source,calculation_provider,
     calculated_miles,route_metadata_json,calculated_at,start_place_id,end_place_id,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(id,input.mcId ?? null,value.clientId,value.projectId,text(input.tripName),value.date,
     text(input.startAddress),text(input.endAddress),text(input.purpose),value.miles,value.roundTrip ? 1 : 0,
-    value.totalMiles,input.billable ? 1 : 0,text(input.notes),calculationSource,
+    value.totalMiles,getMileageRate(db),input.billable ? 1 : 0,text(input.notes),calculationSource,
     calculationSource === "provider" ? text(input.calculationProvider) || null : null,
     calculationSource === "provider" && input.calculatedMiles != null ? finiteNumber(input.calculatedMiles, "Calculated miles") : null,
     calculationSource === "provider" ? input.routeMetadataJson ?? null : null,
@@ -424,7 +448,7 @@ export function getMileageRate(db: DatabaseSync): number {
 
 export function setMileageRate(db: DatabaseSync, value: unknown): number {
   const rate = finiteNumber(value, "Mileage rate");
-  if (rate < 0 || rate > 10) throw new MileageValidationError("Mileage rate must be between 0 and 10 dollars per mile.");
+  if (rate <= 0 || rate > 5) throw new MileageValidationError("Mileage rate must be greater than 0 and no more than 5 dollars per mile.");
   db.prepare(`INSERT INTO app_settings (key,value,updated_at) VALUES (?,?,?)
     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`
   ).run(MILEAGE_RATE_KEY,String(rate),nowIso());
@@ -432,7 +456,8 @@ export function setMileageRate(db: DatabaseSync, value: unknown): number {
 }
 
 export function getMileageSummary(db: DatabaseSync): { totalMiles: number; reimbursement: number; entries: number } {
-  const row = db.prepare("SELECT COALESCE(SUM(total_miles),0) AS miles, COUNT(*) AS entries FROM mileage_entries").get() as { miles: number; entries: number };
+  const row = db.prepare(`SELECT COALESCE(SUM(total_miles),0) AS miles, COUNT(*) AS entries,
+    COALESCE(SUM(total_miles * rate),0) AS reimbursement FROM mileage_entries`).get() as { miles: number; entries: number; reimbursement: number };
   const miles = Number(row.miles);
-  return { totalMiles: miles, reimbursement: Number((miles * getMileageRate(db)).toFixed(2)), entries: Number(row.entries) };
+  return { totalMiles: miles, reimbursement: Number(Number(row.reimbursement).toFixed(2)), entries: Number(row.entries) };
 }

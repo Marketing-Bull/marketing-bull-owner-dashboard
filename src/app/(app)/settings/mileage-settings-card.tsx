@@ -28,14 +28,16 @@ export function MileageSettingsCard({ initialRate }: { initialRate: number }) {
   }
 
   const parsed = Number(rate);
+  const dirty = rate !== String(savedRate);
+  const invalid = rate.trim() === "" || !Number.isFinite(parsed) || parsed <= 0 || parsed > 5;
   return <section className={styles.card}>
     <div className={styles.rowHead}>
       <div><div className={styles.rowTitle}>Mileage reimbursement</div><div className={styles.rowMeta}>Used to estimate reimbursement in the Mileage ledger. Stored miles never change when this rate changes.</div></div>
       <span className={`${styles.statusChip} ${styles.statusActive}`}>${savedRate.toFixed(2)}/mi</span>
     </div>
     <div className={styles.form}>
-      <label className={styles.field}><span className={styles.label}>Rate per mile</span><input className={styles.input} type="number" inputMode="decimal" min="0" max="10" step="0.01" value={rate} onChange={(event) => setRate(event.target.value)} /></label>
-      <div className={styles.formActions}><button type="button" className={styles.button} disabled={busy || !Number.isFinite(parsed) || parsed < 0 || parsed > 10 || parsed === savedRate} onClick={() => void saveRate()}>{busy ? "Saving…" : "Save rate"}</button>{message ? <span className={styles.rowMeta}>{message}</span> : null}{error ? <span className={styles.error}>{error}</span> : null}</div>
+      <label className={styles.field}><span className={styles.label}>Rate per mile</span><input className={styles.input} type="number" inputMode="decimal" min="0.01" max="5" step="0.01" value={rate} onChange={(event) => setRate(event.target.value)} /></label>
+      <div className={styles.formActions}><button type="button" className={styles.button} disabled={busy || invalid || parsed === savedRate} onClick={() => void saveRate()}>{busy ? "Saving…" : "Save rate"}</button>{dirty && rate.trim() === "" ? <span className={styles.error}>Enter a rate, e.g. 0.70</span> : null}{message ? <span className={styles.rowMeta}>{message}</span> : null}{error ? <span className={styles.error}>{error}</span> : null}</div>
     </div>
   </section>;
 }

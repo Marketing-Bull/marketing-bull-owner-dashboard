@@ -610,6 +610,21 @@
   flex: 1;
 }
 
+.sheetFooter > .secondaryButton {
+  order: 1;
+}
+
+.sheetFooter > .primaryButton {
+  order: 2;
+}
+
+.sheetNotice {
+  margin: 0;
+  padding: 0 20px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .sheetForm {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

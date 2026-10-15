@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { safeNextPath } from "@/lib/auth";
 import styles from "./login.module.css";
 
 /**
@@ -55,7 +56,7 @@ export default function LoginPage() {
       // Read the redirect target here rather than via useSearchParams so the
       // page does not need a Suspense boundary just to resolve a query param.
       const next = new URLSearchParams(window.location.search).get("next");
-      window.location.replace(next && next.startsWith("/") ? next : "/");
+      window.location.replace(safeNextPath(next));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setSubmitting(false);

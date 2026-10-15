@@ -11,7 +11,9 @@ export function RecordSheet({
   dirty,
   onClose,
   children,
-  footer
+  footer,
+  notice,
+  onNoticeClear
 }: {
   open: boolean;
   title: string;
@@ -20,6 +22,8 @@ export function RecordSheet({
   onClose: () => void;
   children: React.ReactNode;
   footer: React.ReactNode;
+  notice?: string;
+  onNoticeClear?: () => void;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const keepEditingRef = useRef<HTMLButtonElement>(null);
@@ -76,7 +80,8 @@ export function RecordSheet({
             {subtitle ? <p>{subtitle}</p> : null}
           </div>
         </header>
-        <div className={styles.sheetBody}>{children}</div>
+        <div className={styles.sheetBody} onChangeCapture={onNoticeClear}>{children}</div>
+        {notice ? <p className={styles.sheetNotice} role="status">{notice}</p> : null}
         <footer className={styles.sheetFooter}>{footer}</footer>
       </section>
       {confirmingClose ? (

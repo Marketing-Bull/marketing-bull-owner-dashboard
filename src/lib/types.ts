@@ -63,6 +63,7 @@ export type CalendarEvent = {
   endMs: number;
   allDay: boolean;
   calendarName: string;
+  free?: boolean;
   location?: string;
   href?: string;
 };
@@ -242,6 +243,7 @@ export type MileageEntry = {
   miles: number;
   roundTrip: boolean;
   totalMiles: number;
+  rate: number;
   billable: boolean;
   notes: string;
   calculationSource: "manual" | "provider";
@@ -277,6 +279,11 @@ export type PriorityBucket = {
 export type HoursEntry = {
   label: string;
   hours: number;
+};
+
+export type HoursWindow = {
+  entries: HoursEntry[];
+  totalHours: number;
 };
 
 export type UpNextTask = {
@@ -356,9 +363,9 @@ export type ClickUpSourceInfo = {
 export type DashboardData = {
   priorities: PriorityBucket[];
   hours: {
-    day: HoursEntry[];
-    week: HoursEntry[];
-    month: HoursEntry[];
+    day: HoursWindow;
+    week: HoursWindow;
+    month: HoursWindow;
   };
   upNext: UpNextTask[];
   source?: "live" | "sample";

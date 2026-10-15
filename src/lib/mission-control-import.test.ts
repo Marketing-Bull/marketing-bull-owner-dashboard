@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { listClients, listProjects } from "@/lib/entities";
+import { getMileageEntryByMcId } from "@/lib/mileage";
 import { runMigrations } from "@/lib/migrations";
 import { runMissionControlImport } from "@/lib/mission-control-import";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
@@ -143,7 +144,7 @@ function mcDb(): DatabaseSync {
            (202,'2026-03-12',0,'Software','Marketing Bull','Free plan',NULL,NULL,'none','2026-03-12'),
            (203,'2026-03-13',-1,'Software','Marketing Bull','Bad',NULL,NULL,'none','2026-03-13')`).run();
   db.prepare("INSERT INTO mileage_entries (id,trip_name,entry_date,start_address,end_address,miles,is_round_trip,total_miles,client_id,purpose) VALUES (300,'Client run','2026-03-10','A','B',11,1,11,1,'Meeting')").run();
-  db.prepare("INSERT INTO settings (key,value) VALUES ('mileage_rate','0.67')").run();
+  db.prepare("INSERT INTO settings (key,value) VALUES ('mileage_rate','0.73')").run();
 
   open.push(db);
   return db;
@@ -163,6 +164,7 @@ describe("runMissionControlImport", () => {
     expect(summary.recurringExpenses).toEqual({ inserted: 1, updated: 0, skipped: 0 });
     expect(summary.expenses).toEqual({ inserted: 3, updated: 0, skipped: 1 });
     expect(summary.mileageEntries).toEqual({ inserted: 1, updated: 0, skipped: 0 });
+    expect(getMileageEntryByMcId(dash, 300)?.rate).toBe(0.73);
 
     const clients = listClients(dash, { includeArchived: true });
     const byName = new Map(clients.map((c) => [c.name, c]));

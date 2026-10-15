@@ -5,7 +5,7 @@ import { assertMapsRateLimit, autocompleteAddress, MapsError } from "@/lib/maps"
 export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   try {
-    assertMapsRateLimit(request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local");
+    assertMapsRateLimit("autocomplete");
     const query = new URL(request.url).searchParams.get("q") || "";
     return NextResponse.json({ suggestions: await autocompleteAddress(getDatabase(), query) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

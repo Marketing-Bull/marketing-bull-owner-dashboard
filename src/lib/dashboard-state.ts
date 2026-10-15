@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
 import { cwd } from "node:process";
@@ -54,6 +55,7 @@ type DashboardStateRow = {
 };
 
 let database: DatabaseSync | null = null;
+let lastBackupAttemptDay: string | null = null;
 
 /**
  * The one shared connection, migrated on first open. Exported so the entity
@@ -61,17 +63,27 @@ let database: DatabaseSync | null = null;
  * state as the dashboard state itself. The schema lives in `@/lib/schema`.
  */
 export function getDatabase(): DatabaseSync {
-  if (database) return database;
+  if (!database) {
+    const path = databasePath();
+    mkdirSync(dirname(path), { recursive: true });
+    database = new DatabaseSync(path);
+    runMigrations(database, DASHBOARD_MIGRATIONS);
+    // First boot only: load the imported mission-control clients/projects so a
+    // fresh deployment starts populated. A database with any entity row -- this
+    // one included, on every open after the first -- is left alone.
+    seedEntitiesIfEmpty(database);
+  }
 
-  const path = databasePath();
-  mkdirSync(dirname(path), { recursive: true });
-  database = new DatabaseSync(path);
-  runMigrations(database, DASHBOARD_MIGRATIONS);
-  // First boot only: load the imported mission-control clients/projects so a
-  // fresh deployment starts populated. A database with any entity row -- this
-  // one included, on every open after the first -- is left alone.
-  seedEntitiesIfEmpty(database);
-
+  const day = todayKey();
+  if (lastBackupAttemptDay !== day) {
+    lastBackupAttemptDay = day;
+    try {
+      ensureDailyBackup(database, backupsDirectory(), day);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[owner-dashboard] daily backup failed (request continued): ${reason}`);
+    }
+  }
   return database;
 }
 
@@ -144,7 +156,7 @@ function normalizeHyperfocus(value: unknown): ManualState["hyperfocus"] {
   };
 }
 
-function normalizeManualState(value: unknown): ManualState {
+export function normalizeManualState(value: unknown): ManualState {
   if (!value || typeof value !== "object") return DEFAULT_MANUAL_STATE;
   const candidate = value as Record<string, unknown>;
   const mrr = candidate.mrr && typeof candidate.mrr === "object" ? candidate.mrr as Record<string, unknown> : {};
@@ -153,15 +165,16 @@ function normalizeManualState(value: unknown): ManualState {
       ? (candidate.phoneCalls as Record<string, unknown>)
       : {};
 
+  const seenCallIds = new Set<string>();
   const normalizePhoneCallList = (list: unknown): PhoneCallItem[] =>
     Array.isArray(list)
       ? list.map((entry, index) => {
           const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+          let id = typeof item.id === "string" && item.id ? item.id : `call-${Date.now()}-${index}`;
+          if (seenCallIds.has(id)) id = randomUUID();
+          seenCallIds.add(id);
           return {
-            id:
-              typeof item.id === "string" && item.id
-                ? item.id
-                : `call-${Date.now()}-${index}`,
+            id,
             name: typeof item.name === "string" ? item.name : "",
             number: typeof item.number === "string" ? item.number : "",
             checked: Boolean(item.checked)
@@ -242,6 +255,17 @@ export type DashboardStatePayload = {
   collapsed: CollapsibleId[];
   hiddenWidgets: WidgetId[];
 };
+
+export function mergeDashboardStatePayload(
+  current: DashboardStatePayload,
+  partial: Record<string, unknown>
+): DashboardStatePayload {
+  const merged: Record<string, unknown> = { ...current };
+  for (const key of ["manual", "widgetOrder", "collapsed", "hiddenWidgets"] as const) {
+    if (Object.prototype.hasOwnProperty.call(partial, key)) merged[key] = partial[key];
+  }
+  return merged as DashboardStatePayload;
+}
 
 /** A malformed JSON column must not 500 the whole dashboard. */
 function safeParse(json: string): unknown {

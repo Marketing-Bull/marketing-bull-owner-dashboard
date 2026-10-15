@@ -237,6 +237,30 @@ describe("monthlyRecurringCost", () => {
 });
 
 describe("buildCommandCenter", () => {
+  it("uses cash basis dates, excludes unpaid and future expenses, and shows accounts payable", () => {
+    const db = freshDb();
+    addAccount(db, "6000");
+    addExpense(db, { date: "2026-10-10", amount: 5000, accountCode: "6000" });
+    db.prepare("UPDATE expenses SET paid = 0 WHERE amount = 5000").run();
+    addExpense(db, { date: "2026-10-03", amount: 100, accountCode: "6000" });
+    addExpense(db, { date: "2026-09-30", amount: 70, accountCode: "6000" });
+    db.prepare("UPDATE expenses SET paid_on = ? WHERE amount = 70").run("2026-10-02");
+    addExpense(db, { date: "2026-10-28", amount: 1000, accountCode: "6000" });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-10-15" });
+    const october = payload.trend.find((point) => point.month === "2026-10");
+
+    expect(payload.money.expenses).toBe(170);
+    expect(payload.money.due).toBe(5000);
+    expect(october?.expenses).toBe(170);
+    expect(payload.tax.deductible).toBe(170);
+    expect(payload.tax.lines.reduce((total, line) => total + line.amount, 0)).toBe(170);
+    expect(payload.attention.find((item) => item.id === "due-expenses")).toMatchObject({
+      href: "/expenses?paid=false",
+      amount: 5000
+    });
+  });
+
   it("computes money, work, and reimbursables from the ledgers", () => {
     const db = freshDb();
     addClient(db, "c1", { name: "Acme", mrr: 2000 });
@@ -348,6 +372,26 @@ describe("buildCommandCenter", () => {
     expect(byId.get("quiet")?.lastActivity).toBe("2026-01-02");
   });
 
+  it("uses a new client's creation date instead of flagging it as gone quiet", () => {
+    const db = freshDb();
+    addClient(db, "new-client", { name: "New Client" });
+    db.prepare("UPDATE clients SET created_at = ? WHERE id = ?").run("2026-10-15T10:00:00.000Z", "new-client");
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-10-15" });
+    expect(payload.clients[0].lastActivity).toBe("2026-10-15");
+    expect(payload.attention.some((item) => item.id === "silent-clients")).toBe(false);
+  });
+
+  it("does not let future-dated entries hide a time-logging gap", () => {
+    const db = freshDb();
+    addTime(db, { date: "2026-10-01", hours: 2 });
+    addTime(db, { date: "2026-10-20", hours: 2 });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-10-15" });
+    expect(payload.cadence.lastEntryDate).toBe("2026-10-01");
+    expect(payload.attention.find((item) => item.id === "time-gap")?.title).toBe("No time logged for 14 days");
+  });
+
   it("counts the logging streak from yesterday when today is still empty", () => {
     const db = freshDb();
     addTime(db, { date: "2026-08-12", hours: 2 });
@@ -399,6 +443,14 @@ describe("buildCommandCenter", () => {
     expect(payload.activity[2].amount).toBe(13.4);
   });
 
+  it("marks non-billable time as non-billable with a zero amount", () => {
+    const db = freshDb();
+    addTime(db, { date: "2026-08-13", hours: 4, rate: 150, billable: 0 });
+
+    const [activity] = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" }).activity;
+    expect(activity).toMatchObject({ kind: "time", amount: 0, billable: false });
+  });
+
   it("says nothing at all about a clean database", () => {
     const db = freshDb();
     addAccount(db, "6000");
@@ -437,7 +489,6 @@ describe("buildAttention", () => {
     missingReceiptCount: 0,
     missingReceiptAmount: 0,
     mileageMiles: 0,
-    mileageRate: 0.67,
     mileageDeduction: 0,
     lines: []
   };
@@ -450,6 +501,21 @@ describe("buildAttention", () => {
     loggedDaysLast14: 9,
     streakDays: 4
   };
+  const baseMoney = {
+    income: 0,
+    expenses: 0,
+    due: 0,
+    net: 0,
+    margin: null,
+    previousIncome: 0,
+    previousExpenses: 0,
+    previousNet: 0,
+    committedMrr: 0,
+    mrrClients: 0,
+    fixedMonthlyCost: 0,
+    recurringCount: 0,
+    fixedCoverage: null
+  };
 
   function client(patch: Partial<ClientRollup> = {}): ClientRollup {
     return {
@@ -461,6 +527,7 @@ describe("buildAttention", () => {
       hourlyRate: null,
       paidThroughDate: "2026-12-31",
       invoiceStatus: "",
+      createdAt: NOW,
       hours: 5,
       billableValue: 750,
       income: 1000,
@@ -491,10 +558,12 @@ describe("buildAttention", () => {
     projects?: ProjectRollup[];
     tax?: typeof baseTax;
     cadence?: typeof baseCadence;
+    money?: typeof baseMoney;
   }) {
     return buildAttention({
       today: "2026-08-13",
       period,
+      money: patch.money ?? baseMoney,
       work: patch.work ?? baseWork,
       clients: patch.clients ?? [client()],
       projects: patch.projects ?? [project()],

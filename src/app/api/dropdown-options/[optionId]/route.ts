@@ -3,6 +3,7 @@ import { getDatabase } from "@/lib/dashboard-state";
 import {
   deleteDropdownOption,
   DropdownOptionError,
+  DropdownOptionNotFoundError,
   isDropdownListKey,
   listDropdownOptions,
   moveDropdownOption,
@@ -18,7 +19,7 @@ function listKeyOrError(value: unknown): DropdownListKey {
 }
 
 function failure(error: unknown) {
-  const status = error instanceof DropdownOptionError ? 400 : 500;
+  const status = error instanceof DropdownOptionNotFoundError ? 404 : error instanceof DropdownOptionError ? 400 : 500;
   return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status });
 }
 

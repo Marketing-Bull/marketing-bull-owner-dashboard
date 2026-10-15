@@ -5,7 +5,7 @@ import { assertMapsRateLimit, calculateDrivingRoutes, MapsError } from "@/lib/ma
 export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
-    assertMapsRateLimit(request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local");
+    assertMapsRateLimit("distance");
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!body) return NextResponse.json({ error: "Expected a JSON body." }, { status: 400 });
     return NextResponse.json(await calculateDrivingRoutes(getDatabase(), body.start, body.end), { headers: { "Cache-Control": "no-store" } });

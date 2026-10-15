@@ -6,6 +6,7 @@ import {
   isAuthConfigured,
   isPublicPath,
   readBearerToken,
+  safeNextPath,
   tokensMatch
 } from "@/lib/auth";
 
@@ -175,6 +176,17 @@ describe("readBearerToken", () => {
   it("reads the token from a well-formed header, case-insensitively", () => {
     expect(readBearerToken("Bearer abc123")).toBe("abc123");
     expect(readBearerToken("bearer abc123")).toBe("abc123");
+  });
+
+  describe("safeNextPath", () => {
+    it("keeps only same-origin absolute paths", () => {
+      expect(safeNextPath("/command")).toBe("/command");
+      expect(safeNextPath("/expenses?paid=false")).toBe("/expenses?paid=false");
+      expect(safeNextPath("//evil.example")).toBe("/");
+      expect(safeNextPath("/\\evil.example")).toBe("/");
+      expect(safeNextPath("https://evil.example")).toBe("/");
+      expect(safeNextPath(null)).toBe("/");
+    });
   });
 
   it("ignores other schemes and empty values", () => {

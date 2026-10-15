@@ -113,3 +113,12 @@ export function readBearerToken(authorizationHeader: string | null): string | un
   if (scheme.toLowerCase() !== "bearer") return undefined;
   return rest.join(" ").trim() || undefined;
 }
+
+export function safeNextPath(next: string | null): string {
+  if (!next || !next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return "/";
+  try {
+    return new URL(next, "http://x").origin === "http://x" ? next : "/";
+  } catch {
+    return "/";
+  }
+}

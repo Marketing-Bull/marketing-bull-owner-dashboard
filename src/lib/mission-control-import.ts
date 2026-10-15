@@ -617,6 +617,16 @@ function importMissionControlRows(mc: DatabaseSync, dash: DatabaseSync): ImportS
   if (unmappedExpenseRows) warnings.push(`${unmappedExpenseRows} source rows had no category/account mapping; account code left unset`);
   if (omittedReceiptPaths) warnings.push(`${omittedReceiptPaths} source receipt paths were not copied; attach the files again in this app`);
 
+  const mileageSetting = mc.prepare("SELECT value FROM settings WHERE key='mileage_rate'").get() as { value?: unknown } | undefined;
+  const mileageRate = num(mileageSetting?.value);
+  if (mileageRate != null && mileageRate > 0 && mileageRate <= 5) {
+    setMileageRate(dash, mileageRate);
+    settings.updated += 1;
+  } else {
+    settings.skipped += 1;
+    warnings.push("mileage_rate setting missing or invalid; dashboard default kept");
+  }
+
   const mcMileage = mc.prepare("SELECT * FROM mileage_entries ORDER BY id").all() as McRow[];
   for (const row of mcMileage) {
     const input = mapMcMileage(row, warnings);
@@ -630,16 +640,6 @@ function importMissionControlRows(mc: DatabaseSync, dash: DatabaseSync): ImportS
       createMileageEntry(dash, { ...input, ...relations });
       mileageEntries.inserted += 1;
     }
-  }
-
-  const mileageSetting = mc.prepare("SELECT value FROM settings WHERE key='mileage_rate'").get() as { value?: unknown } | undefined;
-  const mileageRate = num(mileageSetting?.value);
-  if (mileageRate != null && mileageRate >= 0 && mileageRate <= 10) {
-    setMileageRate(dash, mileageRate);
-    settings.updated += 1;
-  } else {
-    settings.skipped += 1;
-    warnings.push("mileage_rate setting missing or invalid; dashboard default kept");
   }
 
   return { clients, projects, timeEntries, chartAccounts, categoryAccounts, recurringExpenses, expenses, mileageEntries, settings, warnings };

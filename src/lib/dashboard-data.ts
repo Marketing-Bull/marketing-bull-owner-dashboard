@@ -13,6 +13,7 @@ import type {
   ClickUpSyncInfo,
   DashboardData,
   HoursEntry,
+  HoursWindow,
   PriorityBucket,
   UpNextTask
 } from "@/lib/types";
@@ -86,6 +87,16 @@ function normalizeHoursEntries(value: unknown): HoursEntry[] {
     .filter((entry) => entry.label !== "");
 }
 
+function normalizeHoursWindow(value: unknown): HoursWindow {
+  const item = asRecord(value);
+  const entries = normalizeHoursEntries(Array.isArray(value) ? value : item.entries);
+  const total = Number(item.totalHours);
+  return {
+    entries,
+    totalHours: Number.isFinite(total) ? total : entries.reduce((sum, entry) => sum + entry.hours, 0)
+  };
+}
+
 function normalizeUpNext(value: unknown): UpNextTask[] {
   if (!Array.isArray(value)) return [];
   return value.map((entry, index) => {
@@ -148,9 +159,9 @@ export function normalizeDashboardData(value: unknown): DashboardData {
   return {
     priorities: normalizePriorities(root.priorities),
     hours: {
-      day: normalizeHoursEntries(hours.day),
-      week: normalizeHoursEntries(hours.week),
-      month: normalizeHoursEntries(hours.month)
+      day: normalizeHoursWindow(hours.day),
+      week: normalizeHoursWindow(hours.week),
+      month: normalizeHoursWindow(hours.month)
     },
     upNext: normalizeUpNext(root.upNext),
     source: root.source === "live" ? "live" : "sample",

@@ -8,6 +8,7 @@ export function DeleteDialog({
   title,
   description,
   confirmLabel,
+  busyLabel = "Deleting…",
   busy,
   onCancel,
   onConfirm
@@ -16,6 +17,7 @@ export function DeleteDialog({
   title: string;
   description: string;
   confirmLabel: string;
+  busyLabel?: string;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -41,7 +43,7 @@ export function DeleteDialog({
         <div className={styles.dialogActions}>
           <button ref={cancelRef} type="button" className={styles.secondaryButton} onClick={onCancel} disabled={busy}>Cancel</button>
           <button type="button" className={styles.dangerButton} onClick={onConfirm} disabled={busy}>
-            {busy ? "Deleting…" : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </div>
       </section>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { isAuthConfigured } from "@/lib/auth";
-import { saveDashboardState, loadDashboardState, loadHistory } from "@/lib/dashboard-state";
+import { saveDashboardState, loadDashboardState, loadHistory, mergeDashboardStatePayload } from "@/lib/dashboard-state";
 import { computeStreak, todayKey } from "@/lib/history";
 
 export const dynamic = "force-dynamic";
@@ -36,9 +36,20 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  let payload: unknown;
   try {
-    const payload = await request.json();
-    return NextResponse.json(saveDashboardState(payload), {
+    payload = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Expected valid JSON." }, { status: 400 });
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return NextResponse.json({ error: "Expected a JSON object." }, { status: 400 });
+  }
+
+  try {
+    const current = loadDashboardState();
+    const merged = mergeDashboardStatePayload(current, payload as Record<string, unknown>);
+    return NextResponse.json(saveDashboardState(merged), {
       headers: { "Cache-Control": "no-store" }
     });
   } catch (error) {

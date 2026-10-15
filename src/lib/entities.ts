@@ -216,6 +216,9 @@ export function updateClient(db: DatabaseSync, id: string, patch: Partial<Client
   if (patch.paymentType !== undefined && !isPaymentType(patch.paymentType)) {
     throw new EntityValidationError(`Unknown payment type "${String(patch.paymentType)}".`);
   }
+  if (patch.isArchived !== undefined && typeof patch.isArchived !== "boolean") {
+    throw new EntityValidationError("Archived must be true or false.");
+  }
 
   db.prepare(`
     UPDATE clients SET
@@ -277,6 +280,7 @@ export function getProjectByMcId(db: DatabaseSync, mcId: number): Project | null
 
 function assertClientExists(db: DatabaseSync, clientId: string | null | undefined): void {
   if (clientId == null) return;
+  if (typeof clientId !== "string") throw new EntityValidationError("Client id must be a string or null.");
   if (!getClient(db, clientId)) {
     throw new EntityValidationError("That client does not exist.");
   }
@@ -287,6 +291,12 @@ export function createProject(db: DatabaseSync, input: ProjectInput): Project {
   if (!name) throw new EntityValidationError("A project needs a name.");
   if (input.status !== undefined && !isProjectStatus(input.status)) {
     throw new EntityValidationError(`Unknown project status "${String(input.status)}".`);
+  }
+  if (input.urgent !== undefined && typeof input.urgent !== "boolean") {
+    throw new EntityValidationError("Urgent must be true or false.");
+  }
+  if (input.important !== undefined && typeof input.important !== "boolean") {
+    throw new EntityValidationError("Important must be true or false.");
   }
   assertClientExists(db, input.clientId);
 
@@ -327,6 +337,15 @@ export function updateProject(
   if (!name) throw new EntityValidationError("A project needs a name.");
   if (patch.status !== undefined && !isProjectStatus(patch.status)) {
     throw new EntityValidationError(`Unknown project status "${String(patch.status)}".`);
+  }
+  if (patch.urgent !== undefined && typeof patch.urgent !== "boolean") {
+    throw new EntityValidationError("Urgent must be true or false.");
+  }
+  if (patch.important !== undefined && typeof patch.important !== "boolean") {
+    throw new EntityValidationError("Important must be true or false.");
+  }
+  if (patch.isArchived !== undefined && typeof patch.isArchived !== "boolean") {
+    throw new EntityValidationError("Archived must be true or false.");
   }
   if (patch.clientId !== undefined) assertClientExists(db, patch.clientId);
 

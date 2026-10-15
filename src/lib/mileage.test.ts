@@ -20,14 +20,14 @@ import {
 import { runMigrations } from "@/lib/migrations";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
 import { setStoredMapsApiKey } from "@/lib/app-settings";
-import { autocompleteAddress, calculateDrivingRoutes } from "@/lib/maps";
+import { assertMapsRateLimit, autocompleteAddress, calculateDrivingRoutes, MapsError } from "@/lib/maps";
 
 let open: DatabaseSync[] = [];
 function freshDb(): DatabaseSync {
   const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "owner-dash-mileage-")), "dash.sqlite"));
   runMigrations(db, DASHBOARD_MIGRATIONS); open.push(db); return db;
 }
-afterEach(() => { vi.unstubAllGlobals(); for (const db of open) try { db.close(); } catch {} open = []; });
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); for (const db of open) try { db.close(); } catch {} open = []; });
 
 describe("mileage", () => {
   it("computes and stores round trips instead of trusting a supplied total", () => {
@@ -99,6 +99,8 @@ describe("mileage", () => {
     const project = createProject(db, { name: "Site", clientId: owner.id });
     expect(createMileageEntry(db, { projectId: project.id, date: "2026-08-13", miles: 4 }).clientId).toBe(owner.id);
     expect(() => createMileageEntry(db, { clientId: other.id, projectId: project.id, date: "2026-08-13", miles: 4 })).toThrow(/different client/i);
+    expect(() => createMileageEntry(db, { date: "2026-08-13", miles: "0x10" as never })).toThrow(/miles must be a number/i);
+    expect(() => createMileageEntry(db, { date: "2026-08-13", miles: 1, routeMetadataJson: { a: 1 } as never })).toThrow(/JSON string/i);
     expect(() => createMileageEntry(db, { date: "2026-08-13", miles: 0 })).toThrow(/greater than 0/i);
   });
 
@@ -112,6 +114,59 @@ describe("mileage", () => {
     expect(getMileageSummary(db)).toEqual({ totalMiles: 20, reimbursement: 14, entries: 2 });
     deleteMileageEntry(db, first.id);
     expect(getMileageEntry(db, first.id)).toBeNull();
+  });
+
+  it("freezes the reimbursement rate on each trip and preserves it through edits", () => {
+    const db = freshDb();
+    setMileageRate(db, 0.7);
+    const first = createMileageEntry(db, { date: "2026-08-12", miles: 10 });
+
+    setMileageRate(db, 0.85);
+    const second = createMileageEntry(db, { date: "2026-08-13", miles: 10 });
+    const edited = updateMileageEntry(db, first.id, { date: "2027-01-01", miles: 12 });
+
+    expect(first.rate).toBe(0.7);
+    expect(second.rate).toBe(0.85);
+    expect(edited.rate).toBe(0.7);
+    expect(getMileageSummary(db)).toEqual({ totalMiles: 22, reimbursement: 16.9, entries: 2 });
+
+    const result = queryMileageEntries(
+      db,
+      parseMileageQuery(new URLSearchParams({ reimbursementMin: "8.4", reimbursementMax: "8.6" }))
+    );
+    expect(result.items.map((entry) => entry.id)).toEqual([second.id]);
+    expect(result.filteredTotals.reimbursement).toBe(8.5);
+  });
+
+  it("backfills existing trips with the current saved reimbursement rate", () => {
+    const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "owner-dash-mileage-")), "dash.sqlite"));
+    open.push(db);
+    runMigrations(db, DASHBOARD_MIGRATIONS.slice(0, -1));
+    const now = new Date().toISOString();
+    db.prepare("UPDATE app_settings SET value = ?, updated_at = ? WHERE key = 'mileage.rate'").run("0.73", now);
+    db.prepare(`INSERT INTO mileage_entries (id,date,miles,total_miles,created_at,updated_at)
+      VALUES ('legacy-trip','2026-08-01',5,5,?,?)`).run(now, now);
+
+    runMigrations(db, DASHBOARD_MIGRATIONS);
+    expect(getMileageEntry(db, "legacy-trip")?.rate).toBe(0.73);
+  });
+
+  it("rejects a blank or out-of-range reimbursement rate", () => {
+    const db = freshDb();
+    for (const invalid of [0, -1, ""]) {
+      expect(() => setMileageRate(db, invalid)).toThrow(/mileage rate/i);
+    }
+    expect(setMileageRate(db, 0.7)).toBe(0.7);
+  });
+
+  it("uses a bounded per-route maps bucket and resets it after the window", () => {
+    vi.useFakeTimers();
+    for (let request = 0; request < 30; request += 1) {
+      assertMapsRateLimit("autocomplete");
+    }
+    expect(() => assertMapsRateLimit("autocomplete")).toThrow(MapsError);
+    vi.advanceTimersByTime(60_001);
+    expect(() => assertMapsRateLimit("autocomplete")).not.toThrow();
   });
 
   it("queries route fields, reimbursement ranges, filtered totals, and facets", () => {

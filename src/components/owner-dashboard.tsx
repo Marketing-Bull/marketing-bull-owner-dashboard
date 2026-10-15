@@ -435,7 +435,7 @@ export function OwnerDashboard({ version }: { version: string }) {
   async function fetchDashboardData() {
     setDashboardError(null);
     try {
-      const response = await fetch("/api/dashboard", { cache: "no-store" });
+      const response = await fetch(`/api/dashboard?today=${dayKey(new Date())}`, { cache: "no-store" });
       if (redirectedToLogin(response)) return;
       const json = await response.json();
       if (!response.ok) {
@@ -653,7 +653,7 @@ export function OwnerDashboard({ version }: { version: string }) {
     [calendarEvents, dayStartMs]
   );
 
-  const hoursEntries = dashboardData?.hours[hoursWindow] ?? [];
+  const hoursEntries = dashboardData?.hours[hoursWindow].entries ?? [];
   const maxHours = Math.max(...hoursEntries.map((entry) => entry.hours), 1);
 
   const isRefreshing = loadingDashboard || loadingCalendar || loadingState || loadingEntities;
@@ -731,7 +731,7 @@ export function OwnerDashboard({ version }: { version: string }) {
         ? `Saved ${formatClock(lastSavedAt)}`
         : null;
 
-  const weekHours = (dashboardData?.hours.week ?? []).reduce((total, entry) => total + entry.hours, 0);
+  const weekHours = dashboardData?.hours.week.totalHours ?? 0;
   const openTasks = dashboardData?.upNext.filter((task) => !task.done).length ?? 0;
   const clickUpSync = dashboardData?.clickUpSync;
   const clickUpSyncLabel = loadingDashboard
@@ -755,7 +755,7 @@ export function OwnerDashboard({ version }: { version: string }) {
     if (now === null) return null;
     return (
       calendarEvents
-        .filter((event) => event.endMs >= now)
+        .filter((event) => !event.free && event.endMs >= now)
         .sort((a, b) => a.startMs - b.startMs)[0] ?? null
     );
   }, [calendarEvents, now]);
@@ -946,6 +946,7 @@ export function OwnerDashboard({ version }: { version: string }) {
           <div className={styles.hoursToggle}>
             <button
               type="button"
+              aria-pressed={hoursWindow === "day"}
               className={`${styles.toggleButton} ${hoursWindow === "day" ? styles.toggleActive : ""}`}
               onClick={() => setHoursWindow("day")}
             >
@@ -953,6 +954,7 @@ export function OwnerDashboard({ version }: { version: string }) {
             </button>
             <button
               type="button"
+              aria-pressed={hoursWindow === "week"}
               className={`${styles.toggleButton} ${hoursWindow === "week" ? styles.toggleActive : ""}`}
               onClick={() => setHoursWindow("week")}
             >
@@ -960,6 +962,7 @@ export function OwnerDashboard({ version }: { version: string }) {
             </button>
             <button
               type="button"
+              aria-pressed={hoursWindow === "month"}
               className={`${styles.toggleButton} ${hoursWindow === "month" ? styles.toggleActive : ""}`}
               onClick={() => setHoursWindow("month")}
             >
@@ -1029,12 +1032,13 @@ export function OwnerDashboard({ version }: { version: string }) {
                       <button
                         key={event.id}
                         type="button"
-                        className={`${styles.eventCard} ${styles.eventCardButton}`}
+                        className={`${styles.eventCard} ${styles.eventCardButton} ${event.free ? styles.eventCardFree : ""}`}
                         onClick={() => setSelectedCalendarEvent(event)}
                       >
                         <div className={styles.timeTag}>{formatEventTime(event)}</div>
                         <div className={styles.rowBetween}>
                           <p className={styles.eventTitle}>{event.title}</p>
+                          {event.free ? <span className={styles.freeTag}>Free</span> : null}
                           {event.href ? (
                             <span className={styles.inlineLink}>
                               <ExternalLink size={12} />
@@ -1261,7 +1265,9 @@ export function OwnerDashboard({ version }: { version: string }) {
     whatsImportant: styles.widgetImportant
   };
 
-  const todayEvents = groupedDays[0]?.events ?? [];
+  const todayEvents = (groupedDays[0]?.events ?? []).filter((event, index, events) =>
+    event.free || events.slice(0, index).filter((previous) => !previous.free).length < 4
+  );
   const focusFields = [
     manual.hyperfocus.lens,
     manual.hyperfocus.target,
@@ -1453,13 +1459,14 @@ export function OwnerDashboard({ version }: { version: string }) {
                   <button
                     key={event.id}
                     type="button"
-                    className={styles.agendaEvent}
+                    className={`${styles.agendaEvent} ${event.free ? styles.agendaEventFree : ""}`}
                     onClick={() => setSelectedCalendarEvent(event)}
                   >
                     <span className={styles.agendaTime}>{formatEventTime(event)}</span>
                     <span className={styles.agendaEventContent}>
                       <strong>{event.title}</strong>
                       <span>{event.location || event.calendarName}</span>
+                      {event.free ? <span className={styles.freeTag}>Free</span> : null}
                     </span>
                   </button>
                 ))

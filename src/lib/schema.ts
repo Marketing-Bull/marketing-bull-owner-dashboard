@@ -438,5 +438,24 @@ export const DASHBOARD_MIGRATIONS: Migration[] = [
         CREATE INDEX idx_expenses_paid ON expenses(paid);
       `);
     }
+  },
+  {
+    // Reimbursement rates are snapshots on each trip so changing the current
+    // setting cannot restate previously recorded deductions.
+    id: "012-mileage-entry-rate",
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE mileage_entries ADD COLUMN rate REAL NOT NULL DEFAULT 0.67;
+        UPDATE mileage_entries
+        SET rate = COALESCE(
+          (SELECT CASE
+            WHEN CAST(value AS REAL) > 0 AND CAST(value AS REAL) <= 5
+            THEN CAST(value AS REAL)
+            ELSE NULL
+          END FROM app_settings WHERE key = 'mileage.rate'),
+          0.67
+        );
+      `);
+    }
   }
 ];

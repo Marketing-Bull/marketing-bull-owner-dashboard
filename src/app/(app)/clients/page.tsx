@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { LoaderCircle, Plus } from "lucide-react";
+import { DeleteDialog } from "@/components/transactions/delete-dialog";
 import styles from "../entities.module.css";
 import { CLIENT_STATUSES, PAYMENT_TYPES, type Client, type ClientStatus, type PaymentType } from "@/lib/types";
 
@@ -186,6 +187,7 @@ export default function ClientsPage() {
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<Client | null>(null);
 
   async function load() {
     try {
@@ -325,7 +327,7 @@ export default function ClientsPage() {
                           type="button"
                           className={`${styles.button} ${styles.buttonDanger}`}
                           disabled={busy}
-                          onClick={() => void submit("DELETE", `/api/clients/${client.id}`)}
+                          onClick={() => setArchiveTarget(client)}
                         >
                           Archive
                         </button>
@@ -350,6 +352,18 @@ export default function ClientsPage() {
           )}
         </section>
       </div>
+      <DeleteDialog
+        open={archiveTarget !== null}
+        title="Archive client?"
+        description={archiveTarget ? `${archiveTarget.name} will be hidden but kept. You can restore it from the archived toggle.` : ""}
+        confirmLabel="Archive client"
+        busyLabel="Archiving…"
+        busy={busy}
+        onCancel={() => setArchiveTarget(null)}
+        onConfirm={async () => {
+          if (archiveTarget && await submit("DELETE", `/api/clients/${archiveTarget.id}`)) setArchiveTarget(null);
+        }}
+      />
     </main>
   );
 }

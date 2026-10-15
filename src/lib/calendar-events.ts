@@ -15,6 +15,10 @@ export type GogEvent = {
   location?: string;
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
+  status?: string;
+  transparency?: string;
+  eventType?: string;
+  attendees?: { self?: boolean; responseStatus?: string }[];
 };
 
 const DEFAULT_EVENT_MINUTES = 30;
@@ -39,6 +43,11 @@ export function parseEventDate(value?: { dateTime?: string; date?: string }): nu
 
 export function normalizeGogEvents(items: GogEvent[]): CalendarEvent[] {
   return items
+    .filter((event) =>
+      event.status !== "cancelled" &&
+      event.eventType !== "workingLocation" &&
+      !event.attendees?.some((attendee) => attendee.self && attendee.responseStatus === "declined")
+    )
     .map((event) => {
       const startMs = parseEventDate(event.start);
       const endMs = parseEventDate(event.end) || startMs + DEFAULT_EVENT_MINUTES * 60 * 1000;
@@ -49,6 +58,7 @@ export function normalizeGogEvents(items: GogEvent[]): CalendarEvent[] {
         endMs,
         allDay: Boolean(event.start?.date && !event.start?.dateTime),
         calendarName: "Google Calendar",
+        free: event.transparency === "transparent",
         location: event.location || undefined,
         href: event.htmlLink || undefined
       };

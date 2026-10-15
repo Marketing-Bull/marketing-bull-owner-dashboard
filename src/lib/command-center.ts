@@ -18,7 +18,6 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import { todayKey } from "@/lib/history";
-import { getMileageRate } from "@/lib/mileage";
 
 export const COMMAND_PERIODS = ["mtd", "last-month", "qtd", "ytd"] as const;
 export type CommandPeriodKey = (typeof COMMAND_PERIODS)[number];
@@ -52,6 +51,7 @@ export type CommandPeriod = {
 export type MoneyBand = {
   income: number;
   expenses: number;
+  due: number;
   net: number;
   /** Net as a share of income; null when nothing came in, since 0/0 is not 0%. */
   margin: number | null;
@@ -88,7 +88,6 @@ export type ReimbursableBand = {
   expenses: number;
   mileageMiles: number;
   mileageAmount: number;
-  mileageRate: number;
   total: number;
 };
 
@@ -111,6 +110,7 @@ export type ClientRollup = {
   hourlyRate: number | null;
   paidThroughDate: string;
   invoiceStatus: string;
+  createdAt: string;
   hours: number;
   billableValue: number;
   income: number;
@@ -159,7 +159,6 @@ export type TaxSnapshot = {
   missingReceiptCount: number;
   missingReceiptAmount: number;
   mileageMiles: number;
-  mileageRate: number;
   mileageDeduction: number;
   lines: Array<{ line: string; category: string; amount: number }>;
 };
@@ -173,6 +172,7 @@ export type ActivityItem = {
   subtitle: string;
   /** Money value: billable amount, expense/income amount, or reimbursement. */
   amount: number;
+  billable: boolean;
   /** Hours for time, miles for mileage, null for money rows. */
   quantity: number | null;
   href: string;
@@ -378,7 +378,11 @@ function moneyTotals(db: DatabaseSync, from: string, to: string): { income: numb
   const rows = db
     .prepare(
       `SELECT kind, COALESCE(SUM(amount), 0) AS total
-       FROM expenses WHERE date >= ? AND date <= ? GROUP BY kind`
+       FROM expenses
+       WHERE paid = 1
+         AND COALESCE(NULLIF(paid_on, ''), date) >= ?
+         AND COALESCE(NULLIF(paid_on, ''), date) <= ?
+       GROUP BY kind`
     )
     .all(from, to) as Row[];
 
@@ -431,21 +435,20 @@ function reimbursableBand(db: DatabaseSync, from: string, to: string): Reimbursa
 
   const mileageRow = db
     .prepare(
-      `SELECT COALESCE(SUM(total_miles), 0) AS miles FROM mileage_entries
+      `SELECT COALESCE(SUM(total_miles), 0) AS miles,
+              COALESCE(SUM(total_miles * rate), 0) AS amount FROM mileage_entries
        WHERE billable = 1 AND date >= ? AND date <= ?`
     )
     .get(from, to) as Row;
 
-  const rate = getMileageRate(db);
   const miles = Math.round(num(mileageRow.miles) * 10) / 10;
-  const mileageAmount = money(miles * rate);
+  const mileageAmount = money(num(mileageRow.amount));
   const expenses = money(num(expenseRow.total));
 
   return {
     expenses,
     mileageMiles: miles,
     mileageAmount,
-    mileageRate: rate,
     total: money(expenses + mileageAmount)
   };
 }
@@ -487,6 +490,9 @@ export function monthlyRecurringCost(
 function moneyBand(db: DatabaseSync, period: CommandPeriod): MoneyBand {
   const current = moneyTotals(db, period.from, period.to);
   const previous = moneyTotals(db, period.previousFrom, period.previousTo);
+  const dueRow = db
+    .prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE kind = 'expense' AND paid = 0")
+    .get() as Row;
 
   const clientRow = db
     .prepare(
@@ -508,6 +514,7 @@ function moneyBand(db: DatabaseSync, period: CommandPeriod): MoneyBand {
   return {
     income: current.income,
     expenses: current.expenses,
+    due: money(num(dueRow.total)),
     net,
     margin: current.income > 0 ? net / current.income : null,
     previousIncome: previous.income,
@@ -526,10 +533,15 @@ function monthlyTrend(db: DatabaseSync, today: string): TrendPoint[] {
 
   const moneyRows = db
     .prepare(
-      `SELECT substr(date, 1, 7) AS month, kind, COALESCE(SUM(amount), 0) AS total
-       FROM expenses WHERE date >= ? AND date <= ? GROUP BY month, kind`
+      `SELECT substr(COALESCE(NULLIF(paid_on, ''), date), 1, 7) AS month,
+              kind, COALESCE(SUM(amount), 0) AS total
+       FROM expenses
+       WHERE paid = 1
+         AND COALESCE(NULLIF(paid_on, ''), date) >= ?
+         AND COALESCE(NULLIF(paid_on, ''), date) <= ?
+       GROUP BY month, kind`
     )
-    .all(firstMonth, endOfMonth(today)) as Row[];
+    .all(firstMonth, today) as Row[];
 
   const hoursRows = db
     .prepare(
@@ -574,7 +586,7 @@ function monthLabel(month: string): string {
 function clientRollups(db: DatabaseSync, period: CommandPeriod): ClientRollup[] {
   const clients = db
     .prepare(
-      `SELECT id, name, status, payment_type, mrr, hourly_rate, paid_through_date, invoice_status
+      `SELECT id, name, status, payment_type, mrr, hourly_rate, paid_through_date, invoice_status, created_at
        FROM clients WHERE is_archived = 0 ORDER BY name COLLATE NOCASE`
     )
     .all() as Row[];
@@ -622,7 +634,7 @@ function clientRollups(db: DatabaseSync, period: CommandPeriod): ClientRollup[] 
     const time = timeByClient.get(id);
     const value = money(num(time?.value));
     const mrr = client.mrr === null || client.mrr === undefined ? null : num(client.mrr);
-    const lastActivity = activityByClient.get(id) || null;
+    const lastActivity = activityByClient.get(id) || text(client.created_at).slice(0, 10) || null;
 
     return {
       id,
@@ -633,6 +645,7 @@ function clientRollups(db: DatabaseSync, period: CommandPeriod): ClientRollup[] 
       hourlyRate: client.hourly_rate === null || client.hourly_rate === undefined ? null : num(client.hourly_rate),
       paidThroughDate: text(client.paid_through_date),
       invoiceStatus: text(client.invoice_status),
+      createdAt: text(client.created_at),
       hours: hours(num(time?.hours)),
       billableValue: value,
       income: money(incomeByClient.get(id) ?? 0),
@@ -683,15 +696,15 @@ function projectRollups(db: DatabaseSync, period: CommandPeriod): ProjectRollup[
  * it belongs in the record rather than at the top of the feed.
  */
 function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
-  const rate = getMileageRate(db);
-
   const rows = db
     .prepare(
-      `SELECT kind, id, date, title, subtitle, amount, quantity FROM (
+      `SELECT kind, id, date, title, subtitle, amount, quantity, billable FROM (
          SELECT 'time' AS kind, t.id AS id, t.date AS date,
                 COALESCE(NULLIF(t.details, ''), 'Time entry') AS title,
                 COALESCE(p.name, c.name, 'Unassigned') AS subtitle,
-                t.hours * t.rate AS amount, t.hours AS quantity, t.created_at AS created_at
+                CASE WHEN t.billable = 1 THEN t.hours * t.rate ELSE 0 END AS amount,
+                t.hours AS quantity, t.billable AS billable,
+                t.created_at AS created_at
          FROM time_entries t
          LEFT JOIN projects p ON p.id = t.project_id
          LEFT JOIN clients c ON c.id = t.client_id
@@ -699,20 +712,20 @@ function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
          SELECT CASE WHEN e.kind = 'income' THEN 'income' ELSE 'expense' END, e.id, e.date,
                 COALESCE(NULLIF(e.vendor, ''), NULLIF(e.details, ''), NULLIF(e.category, ''), 'Record'),
                 COALESCE(NULLIF(e.category, ''), 'Uncategorized'),
-                e.amount, NULL, e.created_at
+                e.amount, NULL, 1, e.created_at
          FROM expenses e
          UNION ALL
          SELECT 'mileage', m.id, m.date,
                 COALESCE(NULLIF(m.trip_name, ''), NULLIF(m.purpose, ''), 'Trip'),
                 COALESCE(c.name, NULLIF(m.end_address, ''), 'Unassigned'),
-                m.total_miles * ?, m.total_miles, m.created_at
+                m.total_miles * m.rate, m.total_miles, 1, m.created_at
          FROM mileage_entries m
          LEFT JOIN clients c ON c.id = m.client_id
        )
        ORDER BY date DESC, created_at DESC
        LIMIT ?`
     )
-    .all(rate, Math.max(1, Math.min(limit, 25))) as Row[];
+    .all(Math.max(1, Math.min(limit, 25))) as Row[];
 
   const hrefs: Record<string, string> = {
     time: "/time",
@@ -730,6 +743,7 @@ function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
       title: text(row.title) || "Record",
       subtitle: text(row.subtitle),
       amount: money(num(row.amount)),
+      billable: Boolean(row.billable),
       quantity: row.quantity === null || row.quantity === undefined ? null : num(row.quantity),
       href: hrefs[kind] ?? "/"
     };
@@ -739,21 +753,26 @@ function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
 function taxSnapshot(db: DatabaseSync, today: string): TaxSnapshot {
   const year = Number(today.slice(0, 4));
   const from = `${year}-01-01`;
-  const to = `${year}-12-31`;
+  const to = today;
 
   const totals = moneyTotals(db, from, to);
 
   const uncategorized = db
     .prepare(
       `SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total FROM expenses
-       WHERE kind = 'expense' AND date >= ? AND date <= ? AND (account_code IS NULL OR account_code = '')`
+       WHERE kind = 'expense' AND paid = 1
+         AND COALESCE(NULLIF(paid_on, ''), date) >= ?
+         AND COALESCE(NULLIF(paid_on, ''), date) <= ?
+         AND (account_code IS NULL OR account_code = '')`
     )
     .get(from, to) as Row;
 
   const receipts = db
     .prepare(
       `SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS total FROM expenses
-       WHERE kind = 'expense' AND date >= ? AND date <= ? AND amount >= ?
+       WHERE kind = 'expense' AND paid = 1
+         AND COALESCE(NULLIF(paid_on, ''), date) >= ?
+         AND COALESCE(NULLIF(paid_on, ''), date) <= ? AND amount >= ?
          AND (receipt_path IS NULL OR receipt_path = '')`
     )
     .get(from, to, RECEIPT_THRESHOLD) as Row;
@@ -769,14 +788,18 @@ function taxSnapshot(db: DatabaseSync, today: string): TaxSnapshot {
               COALESCE(SUM(e.amount), 0) AS total
        FROM expenses e
        LEFT JOIN chart_accounts a ON a.account_code = e.account_code
-       WHERE e.kind = 'expense' AND e.date >= ? AND e.date <= ?
+       WHERE e.kind = 'expense' AND e.paid = 1
+         AND COALESCE(NULLIF(e.paid_on, ''), e.date) >= ?
+         AND COALESCE(NULLIF(e.paid_on, ''), e.date) <= ?
        GROUP BY sc_line, expense_category
        ORDER BY total DESC
        LIMIT 6`
     )
     .all(from, to) as Row[];
 
-  const rate = getMileageRate(db);
+  const mileageAmountRow = db
+    .prepare("SELECT COALESCE(SUM(total_miles * rate), 0) AS amount FROM mileage_entries WHERE date >= ? AND date <= ?")
+    .get(from, to) as Row;
   const miles = Math.round(num(mileageRow.miles) * 10) / 10;
 
   return {
@@ -789,8 +812,7 @@ function taxSnapshot(db: DatabaseSync, today: string): TaxSnapshot {
     missingReceiptCount: num(receipts.count),
     missingReceiptAmount: money(num(receipts.total)),
     mileageMiles: miles,
-    mileageRate: rate,
-    mileageDeduction: money(miles * rate),
+    mileageDeduction: money(num(mileageAmountRow.amount)),
     lines: lineRows.map((row) => ({
       line: text(row.sc_line),
       category: text(row.expense_category),
@@ -807,10 +829,10 @@ function cadenceSnapshot(db: DatabaseSync, today: string): CadenceSnapshot {
       `SELECT
          COALESCE(SUM(CASE WHEN date = ? THEN hours ELSE 0 END), 0) AS today_hours,
          COALESCE(SUM(CASE WHEN date >= ? AND date <= ? THEN hours ELSE 0 END), 0) AS week_hours,
-         MAX(date) AS last_entry
+         MAX(CASE WHEN date <= ? THEN date END) AS last_entry
        FROM time_entries`
     )
-    .get(today, weekStart, today) as Row;
+    .get(today, today, weekStart, today) as Row;
 
   const recentDays = db
     .prepare("SELECT DISTINCT date FROM time_entries WHERE date >= ? AND date <= ? ORDER BY date DESC")
@@ -881,14 +903,27 @@ function nameList(names: string[], limit = 3): string {
 export function buildAttention(input: {
   today: string;
   period: CommandPeriod;
+  money: MoneyBand;
   work: WorkBand;
   clients: ClientRollup[];
   projects: ProjectRollup[];
   tax: TaxSnapshot;
   cadence: CadenceSnapshot;
 }): AttentionItem[] {
-  const { today, period, work, clients, projects, tax, cadence } = input;
+  const { today, period, money, work, clients, projects, tax, cadence } = input;
   const items: AttentionItem[] = [];
+
+  if (money.due > 0) {
+    items.push({
+      id: "due-expenses",
+      severity: "warning",
+      title: `${formatMoney(money.due)} in unpaid bills`,
+      detail: "These bills are not included in cash-basis money out or deductible spend.",
+      href: "/expenses?paid=false",
+      actionLabel: "Review due bills",
+      amount: money.due
+    });
+  }
 
   const overdue = clients.filter(
     (client) =>
@@ -1060,7 +1095,7 @@ export function buildCommandCenter(
     clients,
     projects,
     activity: recentActivity(db),
-    attention: buildAttention({ today, period, work, clients, projects, tax, cadence }),
+    attention: buildAttention({ today, period, money, work, clients, projects, tax, cadence }),
     tax,
     cadence,
     totals: {

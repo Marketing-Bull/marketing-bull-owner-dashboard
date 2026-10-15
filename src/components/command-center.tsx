@@ -705,7 +705,11 @@ function ActivityPanel({ items }: { items: ActivityItem[] }) {
                     <span className={styles.subtle}>{item.subtitle}</span>
                   </span>
                   <span className={styles.activityValue}>
-                    {item.kind === "expense" ? `-${money(item.amount)}` : money(item.amount)}
+                    {item.kind === "time" && !item.billable
+                      ? "Non-billable"
+                      : item.kind === "expense"
+                        ? `-${money(item.amount)}`
+                        : money(item.amount)}
                     <span className={styles.subtle}>
                       {item.quantity === null
                         ? formatDay(item.date)
@@ -745,6 +749,7 @@ export function CommandCenter() {
   const [error, setError] = useState<string | null>(null);
   /** First read fills the screen; later ones refresh it under the old figures. */
   const loadedOnce = useRef(false);
+  const requestController = useRef<AbortController | null>(null);
 
   // The chosen period is a preference, not shared state: it belongs to this
   // browser, so it stays out of the database the old dashboard writes to.
@@ -756,35 +761,43 @@ export function CommandCenter() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  const load = useCallback(async (nextPeriod: CommandPeriodKey, signal?: AbortSignal) => {
+  const load = useCallback(async (nextPeriod: CommandPeriodKey) => {
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
     if (loadedOnce.current) setRefreshing(true);
     else setLoading(true);
 
     try {
-      const response = await fetch(`/api/command?period=${nextPeriod}`, { cache: "no-store", signal });
+      const response = await fetch(`/api/command?period=${nextPeriod}&today=${dayKey(new Date())}`, {
+        cache: "no-store",
+        signal: controller.signal
+      });
       if (redirectedToLogin(response)) return;
       const json = await response.json().catch(() => null);
+      if (controller.signal.aborted) return;
       if (!response.ok) {
         throw new Error(json?.error || `The command feed answered ${response.status}.`);
       }
       setData(json as CommandCenterPayload);
       setError(null);
     } catch (cause) {
-      if (cause instanceof DOMException && cause.name === "AbortError") return;
+      if (controller.signal.aborted) return;
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      loadedOnce.current = true;
-      setLoading(false);
-      setRefreshing(false);
+      if (requestController.current === controller && !controller.signal.aborted) {
+        loadedOnce.current = true;
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => void load(period, controller.signal), 0);
+    const timer = window.setTimeout(() => void load(period), 0);
     return () => {
       window.clearTimeout(timer);
-      controller.abort();
+      requestController.current?.abort();
     };
   }, [period, load]);
 
@@ -826,7 +839,9 @@ export function CommandCenter() {
 
   const todayEvents = useMemo(() => {
     if (!data) return [];
-    return feed.events.filter((event) => dayKey(new Date(event.startMs)) === data.today).slice(0, 4);
+    const events = feed.events.filter((event) => dayKey(new Date(event.startMs)) === data.today);
+    let scheduledCount = 0;
+    return events.filter((event) => event.free || scheduledCount++ < 4);
   }, [feed.events, data]);
 
   if (loading && !data) {
@@ -971,7 +986,7 @@ export function CommandCenter() {
               value={money(reimbursable.total)}
               meta={`${money(reimbursable.expenses)} spend · ${reimbursable.mileageMiles.toFixed(
                 0
-              )} mi at ${currencyCents.format(reimbursable.mileageRate)}`}
+              )} mi at trip rates`}
             />
           </div>
         </section>
@@ -1073,7 +1088,9 @@ export function CommandCenter() {
                       <span className={styles.feedTime}>
                         {event.allDay ? "All day" : formatClock(event.startMs)}
                       </span>
-                      <span className={styles.feedTitle}>{event.title}</span>
+                      <span className={`${styles.feedTitle} ${event.free ? styles.feedFree : ""}`}>
+                        {event.title}{event.free ? <span className={styles.freeTag}>Free</span> : null}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -1148,7 +1165,7 @@ export function CommandCenter() {
                   <span className={styles.statLabel}>Mileage</span>
                   <strong>{money(tax.mileageDeduction)}</strong>
                   <span className={styles.subtle}>
-                    {tax.mileageMiles.toLocaleString()} mi × {currencyCents.format(tax.mileageRate)}
+                    {tax.mileageMiles.toLocaleString()} mi at saved trip rates
                   </span>
                 </div>
               </div>

@@ -10,7 +10,7 @@ import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { backupFileName, ensureDailyBackup, selectBackupsToPrune } from "@/lib/backup";
 
 function scratchDir(): string {
@@ -104,5 +104,31 @@ describe("ensureDailyBackup", () => {
       "keep-me.txt"
     ]);
     db.close();
+  });
+
+  it("snapshots ledger-only activity when the shared database opens", async () => {
+    const dir = scratchDir();
+    vi.resetModules();
+    vi.stubEnv("OWNER_DASHBOARD_DB_PATH", join(dir, "dashboard.sqlite"));
+    const day = (() => {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    })();
+
+    try {
+      const { getDatabase } = await import("@/lib/dashboard-state");
+      const { createTimeEntry } = await import("@/lib/time-entries");
+      const db = getDatabase();
+      createTimeEntry(db, { date: day, hours: 1 });
+
+      const backupsDir = join(dir, "backups");
+      expect(existsSync(join(backupsDir, backupFileName(day)))).toBe(true);
+      getDatabase();
+      expect(readdirSync(backupsDir)).toEqual([backupFileName(day)]);
+      db.close();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 });

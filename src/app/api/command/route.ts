@@ -5,6 +5,8 @@ import {
   DEFAULT_COMMAND_PERIOD,
   isCommandPeriod
 } from "@/lib/command-center";
+import { todayKey } from "@/lib/history";
+import { resolveLocalToday } from "@/lib/time-entries";
 
 export const dynamic = "force-dynamic";
 
@@ -19,10 +21,12 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request: Request) {
   try {
-    const requested = new URL(request.url).searchParams.get("period");
+    const url = new URL(request.url);
+    const requested = url.searchParams.get("period");
     const period = isCommandPeriod(requested) ? requested : DEFAULT_COMMAND_PERIOD;
+    const today = resolveLocalToday(url.searchParams.get("today"), todayKey());
 
-    return NextResponse.json(buildCommandCenter(getDatabase(), { period }), {
+    return NextResponse.json(buildCommandCenter(getDatabase(), { period, today }), {
       headers: { "Cache-Control": "no-store" }
     });
   } catch (error) {

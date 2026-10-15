@@ -5,6 +5,7 @@ import { getClient, getProject, newEntityId } from "@/lib/entities";
 import { isDateKey } from "@/lib/time-entries";
 import {
   addInFilter,
+  addLocalDateRange,
   addLikeFilter,
   assertRange,
   booleanParam,
@@ -42,6 +43,15 @@ export { annualizeExpense };
 type Row = Record<string, unknown>;
 
 export class ExpenseValidationError extends Error {}
+
+export function receiptContentDisposition(name: string): string {
+  const safeName = name || "receipt";
+  const asciiName = safeName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  const utf8Name = encodeURIComponent(safeName).replace(/[!'()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+  return `inline; filename="${asciiName}"; filename*=UTF-8''${utf8Name}`;
+}
 
 export const EXPENSE_SORTS = [
   "date",
@@ -206,6 +216,12 @@ function nullableText(value: unknown): string | null {
 }
 
 function finiteNumber(value: unknown, label: string): number {
+  if (
+    typeof value !== "number" &&
+    (typeof value !== "string" || !/^-?\d+(?:\.\d+)?$/.test(value.trim()))
+  ) {
+    throw new ExpenseValidationError(`${label} must be a number.`);
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed)) throw new ExpenseValidationError(`${label} must be a number.`);
   return parsed;
@@ -407,12 +423,12 @@ export function listExpenses(db: DatabaseSync, options: { from?: string; to?: st
   return (db.prepare(`SELECT * FROM expenses ${where} ORDER BY date DESC, created_at DESC LIMIT ?`).all(...params) as Row[]).map(rowToExpense);
 }
 
-const ANNUALIZED_EXPENSE_SQL = `(CASE recurring
+const ANNUALIZED_EXPENSE_SQL = `ROUND((CASE recurring
   WHEN 'weekly' THEN amount * 52
   WHEN 'monthly' THEN amount * 12
   WHEN 'quarterly' THEN amount * 4
   WHEN 'yearly' THEN amount
-  ELSE NULL END)`;
+  ELSE NULL END), 2)`;
 
 export function parseExpenseQuery(params: URLSearchParams): ExpenseQuery {
   const query: ExpenseQuery = {
@@ -525,10 +541,8 @@ function expenseWhere(query: ExpenseQuery): { where: string; params: QueryScalar
     "category || ' ' || company || ' ' || vendor || ' ' || details || ' ' || payment_method || ' ' || status || ' ' || tags || ' ' || COALESCE(account_code, '')",
     query.search
   );
-  minimum("SUBSTR(created_at, 1, 10)", query.createdFrom);
-  maximum("SUBSTR(created_at, 1, 10)", query.createdTo);
-  minimum("SUBSTR(updated_at, 1, 10)", query.updatedFrom);
-  maximum("SUBSTR(updated_at, 1, 10)", query.updatedTo);
+  addLocalDateRange(clauses, params, "created_at", query.createdFrom, query.createdTo);
+  addLocalDateRange(clauses, params, "updated_at", query.updatedFrom, query.updatedTo);
   return { where: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "", params };
 }
 
