@@ -127,11 +127,14 @@ function addExpense(
     accountCode?: string | null;
     receiptPath?: string | null;
     reimbursable?: number;
+    paid?: number;
+    paidOn?: string | null;
   }
 ): void {
   db.prepare(
-    `INSERT INTO expenses (id, client_id, date, amount, kind, category, account_code, receipt_path, reimbursable, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO expenses (id, client_id, date, amount, kind, category, account_code, receipt_path, reimbursable,
+                           paid, paid_on, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     `e-${Math.random().toString(36).slice(2)}`,
     patch.clientId ?? null,
@@ -142,6 +145,8 @@ function addExpense(
     patch.accountCode ?? null,
     patch.receiptPath ?? null,
     patch.reimbursable ?? 0,
+    patch.paid ?? 1,
+    patch.paidOn ?? null,
     NOW,
     NOW
   );
@@ -593,5 +598,68 @@ describe("audit fixes: committed MRR and fixed cost", () => {
 
     const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
     expect(payload.money.fixedMonthlyCost).toBe(100);
+  });
+});
+
+describe("cash basis", () => {
+  it("counts only paid bills as money out and reports the rest as due", () => {
+    const db = freshDb();
+    addExpense(db, { date: "2026-08-04", amount: 5000, paid: 0 });
+    addExpense(db, { date: "2026-08-05", amount: 100 });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.expenses).toBe(100);
+    expect(payload.money.due).toBe(5000);
+    expect(payload.money.dueCount).toBe(1);
+    expect(payload.trend[11].expenses).toBe(100);
+    expect(payload.tax.deductible).toBe(100);
+
+    const due = payload.attention.find((item) => item.id === "accounts-payable");
+    expect(due).toMatchObject({ count: 1, amount: 5000, href: "/expenses?kind=expense&paid=false" });
+  });
+
+  it("dates a paid bill by when it was paid, not when it was billed", () => {
+    const db = freshDb();
+    addExpense(db, { date: "2026-07-30", amount: 400, paidOn: "2026-08-02" });
+
+    const august = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(august.money.expenses).toBe(400);
+    expect(august.trend[11].expenses).toBe(400);
+    expect(august.trend[10].expenses).toBe(0);
+
+    const july = buildCommandCenter(db, { period: "last-month", today: "2026-08-13" });
+    expect(july.money.expenses).toBe(0);
+  });
+
+  it("leaves unpaid income out of money in and client income", () => {
+    const db = freshDb();
+    addClient(db, "c1", { name: "Acme" });
+    addExpense(db, { date: "2026-08-03", amount: 2000, kind: "income", clientId: "c1", paid: 0 });
+    addExpense(db, { date: "2026-08-04", amount: 700, kind: "income", clientId: "c1" });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.income).toBe(700);
+    expect(payload.clients[0].income).toBe(700);
+    // Receivables are not payables.
+    expect(payload.money.due).toBe(0);
+  });
+
+  it("keeps future-dated rows out of this month's bar and the tax year", () => {
+    const db = freshDb();
+    addExpense(db, { date: "2026-08-05", amount: 100 });
+    addExpense(db, { date: "2026-08-28", amount: 900 });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.expenses).toBe(100);
+    expect(payload.trend[11].expenses).toBe(100);
+    expect(payload.tax.deductible).toBe(100);
+  });
+
+  it("raises no payables item when nothing is due", () => {
+    const db = freshDb();
+    addExpense(db, { date: "2026-08-05", amount: 100 });
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.due).toBe(0);
+    expect(payload.attention.some((item) => item.id === "accounts-payable")).toBe(false);
   });
 });

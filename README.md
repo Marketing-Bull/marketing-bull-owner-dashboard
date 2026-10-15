@@ -125,6 +125,17 @@ The reading order is the order the questions actually get asked:
 | Today | What is on today? | `time_entries` for today, Google Calendar, ClickUp |
 | Deductions | What do I owe the IRS? | `expenses` x `chart_accounts`, `mileage_entries` x rate |
 
+### Cash basis
+
+Money is counted when it moves. An expense or income record counts only once
+it is marked **paid**, on its `paid_on` date (its own date when no payment date
+was recorded). An unpaid bill is accounts payable: it shows as "still due" on
+the Money out tile and as an attention item, and joins money out, the cash-flow
+chart, and deductible spend the day it is marked paid. Nothing dated after
+today counts, so the current month's bar and the Deductions card are to date.
+Reimbursables are the exception: billable or reimbursable spend is owed back by
+the client whether or not the bill has been paid yet.
+
 ### Periods and comparisons
 
 One control drives the whole screen: `Month to date`, `Last month`,
@@ -143,11 +154,12 @@ nothing when nothing is wrong, and each rule links to the exact rows it found:
 | --- | --- | --- |
 | Past paid-through | Costing money | An active client's `paid_through_date` is before today |
 | Billable at $0 | Costing money | Billable time entries in the period resolved to a `0` rate |
+| Unpaid bills | Slipping | Expense records marked Due (unpaid), any date |
 | Retainer over-serviced | Slipping | Billable value delivered exceeds 125% of a client's MRR (monthly windows only) |
 | Focus untouched | Slipping | An urgent **and** important project has no hours this period |
 | Silent clients | Tidy up | An active client has no time, spend, or trips for 30+ days |
-| Uncategorized spend | Tidy up | This year's expenses with no `account_code` |
-| Missing receipts | Tidy up | Expenses over $75 this year with no stored receipt |
+| Uncategorized spend | Tidy up | This year's paid expenses with no `account_code` |
+| Missing receipts | Tidy up | Paid expenses over $75 this year with no stored receipt |
 | Logging gap | Tidy up | Two or more days since the last time entry |
 
 Retainer coverage is deliberately monthly-only: comparing a quarter of delivery
