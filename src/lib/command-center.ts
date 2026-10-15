@@ -434,6 +434,14 @@ function workTotals(
   };
 }
 
+/**
+ * The rate shown beside a mileage total. Trips freeze their own rate, so a
+ * window can mix rates: show the blended one, or today's setting when empty.
+ */
+function effectiveMileageRate(db: DatabaseSync, miles: number, amount: number): number {
+  return miles > 0 ? Math.round((amount / miles) * 1000) / 1000 : getMileageRate(db);
+}
+
 function reimbursableBand(db: DatabaseSync, from: string, to: string): ReimbursableBand {
   const expenseRow = db
     .prepare(
@@ -442,23 +450,23 @@ function reimbursableBand(db: DatabaseSync, from: string, to: string): Reimbursa
     )
     .get(from, to) as Row;
 
+  // Each trip's own frozen rate; miles are not rounded before multiplying.
   const mileageRow = db
     .prepare(
-      `SELECT COALESCE(SUM(total_miles), 0) AS miles FROM mileage_entries
-       WHERE billable = 1 AND date >= ? AND date <= ?`
+      `SELECT COALESCE(SUM(total_miles), 0) AS miles, COALESCE(SUM(total_miles * rate), 0) AS amount
+       FROM mileage_entries WHERE billable = 1 AND date >= ? AND date <= ?`
     )
     .get(from, to) as Row;
 
-  const rate = getMileageRate(db);
-  const miles = Math.round(num(mileageRow.miles) * 10) / 10;
-  const mileageAmount = money(miles * rate);
+  const miles = num(mileageRow.miles);
+  const mileageAmount = money(num(mileageRow.amount));
   const expenses = money(num(expenseRow.total));
 
   return {
     expenses,
-    mileageMiles: miles,
+    mileageMiles: Math.round(miles * 10) / 10,
     mileageAmount,
-    mileageRate: rate,
+    mileageRate: effectiveMileageRate(db, miles, num(mileageRow.amount)),
     total: money(expenses + mileageAmount)
   };
 }
@@ -717,8 +725,6 @@ function projectRollups(db: DatabaseSync, period: CommandPeriod): ProjectRollup[
  * it belongs in the record rather than at the top of the feed.
  */
 function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
-  const rate = getMileageRate(db);
-
   const rows = db
     .prepare(
       `SELECT kind, id, date, title, subtitle, amount, quantity FROM (
@@ -739,14 +745,14 @@ function recentActivity(db: DatabaseSync, limit = 8): ActivityItem[] {
          SELECT 'mileage', m.id, m.date,
                 COALESCE(NULLIF(m.trip_name, ''), NULLIF(m.purpose, ''), 'Trip'),
                 COALESCE(c.name, NULLIF(m.end_address, ''), 'Unassigned'),
-                m.total_miles * ?, m.total_miles, m.created_at
+                m.total_miles * m.rate, m.total_miles, m.created_at
          FROM mileage_entries m
          LEFT JOIN clients c ON c.id = m.client_id
        )
        ORDER BY date DESC, created_at DESC
        LIMIT ?`
     )
-    .all(rate, Math.max(1, Math.min(limit, 25))) as Row[];
+    .all(Math.max(1, Math.min(limit, 25))) as Row[];
 
   const hrefs: Record<string, string> = {
     time: "/time",
@@ -795,7 +801,10 @@ function taxSnapshot(db: DatabaseSync, today: string): TaxSnapshot {
     .get(from, to, RECEIPT_THRESHOLD) as Row;
 
   const mileageRow = db
-    .prepare("SELECT COALESCE(SUM(total_miles), 0) AS miles FROM mileage_entries WHERE date >= ? AND date <= ?")
+    .prepare(
+      `SELECT COALESCE(SUM(total_miles), 0) AS miles, COALESCE(SUM(total_miles * rate), 0) AS amount
+       FROM mileage_entries WHERE date >= ? AND date <= ?`
+    )
     .get(from, to) as Row;
 
   const lineRows = db
@@ -812,8 +821,7 @@ function taxSnapshot(db: DatabaseSync, today: string): TaxSnapshot {
     )
     .all(from, to) as Row[];
 
-  const rate = getMileageRate(db);
-  const miles = Math.round(num(mileageRow.miles) * 10) / 10;
+  const miles = num(mileageRow.miles);
 
   return {
     year,
@@ -824,9 +832,9 @@ function taxSnapshot(db: DatabaseSync, today: string): TaxSnapshot {
     uncategorizedAmount: money(num(uncategorized.total)),
     missingReceiptCount: num(receipts.count),
     missingReceiptAmount: money(num(receipts.total)),
-    mileageMiles: miles,
-    mileageRate: rate,
-    mileageDeduction: money(miles * rate),
+    mileageMiles: Math.round(miles * 10) / 10,
+    mileageRate: effectiveMileageRate(db, miles, num(mileageRow.amount)),
+    mileageDeduction: money(num(mileageRow.amount)),
     lines: lineRows.map((row) => ({
       line: text(row.sc_line),
       category: text(row.expense_category),

@@ -95,8 +95,10 @@ feeds it reads:
 - `expenses`, `recurring_expenses`, `chart_accounts`, and
   `expense_category_accounts`: financial records plus the accounting reference
   data needed for later Schedule-C reporting
-- `mileage_entries`: stored one-way and computed round-trip miles; the current
-  reimbursement rate lives in `app_settings`
+- `mileage_entries`: stored one-way and computed round-trip miles, plus the
+  reimbursement `rate` frozen on each trip when it is logged (like a time
+  entry's hourly rate). The setting in `app_settings` only applies to new
+  trips, so changing it never restates past years
 - `clickup_tasks`: cached assigned ClickUp tasks; refreshed when the cache is
   missing or more than one hour old
 - External feeds: ClickUp assigned tasks and calendar events

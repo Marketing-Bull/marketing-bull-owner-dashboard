@@ -161,3 +161,58 @@ describe("mileage", () => {
     expect(() => parseMileageQuery(new URLSearchParams("direction=sideways"))).toThrow(/one of/i);
   });
 });
+
+describe("frozen trip rate", () => {
+  it("freezes the rate on create and keeps it through edits and setting changes", () => {
+    const db = freshDb();
+    setMileageRate(db, 0.655);
+    const old = createMileageEntry(db, { date: "2023-03-01", miles: 100 });
+    expect(old.rate).toBe(0.655);
+
+    setMileageRate(db, 0.7);
+    const fresh = createMileageEntry(db, { date: "2026-08-12", miles: 100 });
+    expect(fresh.rate).toBe(0.7);
+
+    // Neither a details edit nor moving the date to another year re-rates it.
+    expect(updateMileageEntry(db, old.id, { notes: "Client visit" }).rate).toBe(0.655);
+    expect(updateMileageEntry(db, old.id, { date: "2024-03-01" }).rate).toBe(0.655);
+
+    expect(getMileageSummary(db).reimbursement).toBe(135.5);
+    const result = queryMileageEntries(db, parseMileageQuery(new URLSearchParams()));
+    expect(result.filteredTotals.reimbursement).toBe(135.5);
+    const exact = queryMileageEntries(
+      db,
+      parseMileageQuery(new URLSearchParams({ reimbursementMin: "65.5", reimbursementMax: "65.5" }))
+    );
+    expect(exact.items.map((entry) => entry.id)).toEqual([old.id]);
+  });
+
+  it("backfills existing trips from the setting when the column is added", () => {
+    const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "owner-dash-mrate-")), "dash.sqlite"));
+    const before = DASHBOARD_MIGRATIONS.filter((migration) => migration.id !== "012-mileage-rate");
+    runMigrations(db, before);
+    db.prepare("UPDATE app_settings SET value = '0.7' WHERE key = 'mileage.rate'").run();
+    db.prepare(
+      `INSERT INTO mileage_entries (id, date, miles, round_trip, total_miles, billable, created_at, updated_at)
+       VALUES ('m1', '2025-05-01', 10, 0, 10, 0, 'x', 'x')`
+    ).run();
+
+    runMigrations(db, DASHBOARD_MIGRATIONS);
+    expect(getMileageEntry(db, "m1")?.rate).toBe(0.7);
+    db.close();
+  });
+
+  it("backfills the default when the stored setting is unusable", () => {
+    const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "owner-dash-mrate-")), "dash.sqlite"));
+    runMigrations(db, DASHBOARD_MIGRATIONS.filter((migration) => migration.id !== "012-mileage-rate"));
+    db.prepare("UPDATE app_settings SET value = 'abc' WHERE key = 'mileage.rate'").run();
+    db.prepare(
+      `INSERT INTO mileage_entries (id, date, miles, round_trip, total_miles, billable, created_at, updated_at)
+       VALUES ('m1', '2025-05-01', 10, 0, 10, 0, 'x', 'x')`
+    ).run();
+
+    runMigrations(db, DASHBOARD_MIGRATIONS);
+    expect(getMileageEntry(db, "m1")?.rate).toBe(0.67);
+    db.close();
+  });
+});

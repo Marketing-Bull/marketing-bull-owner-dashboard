@@ -160,16 +160,20 @@ function addAccount(db: DatabaseSync, accountCode: string, scheduleCLine = "Line
   ).run(accountCode, "Software", scheduleCLine, NOW, NOW);
 }
 
-function addTrip(db: DatabaseSync, patch: { date: string; miles: number; billable?: number; clientId?: string }): void {
+function addTrip(
+  db: DatabaseSync,
+  patch: { date: string; miles: number; billable?: number; clientId?: string; rate?: number }
+): void {
   db.prepare(
-    `INSERT INTO mileage_entries (id, client_id, date, miles, round_trip, total_miles, billable, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`
+    `INSERT INTO mileage_entries (id, client_id, date, miles, round_trip, total_miles, rate, billable, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`
   ).run(
     `m-${Math.random().toString(36).slice(2)}`,
     patch.clientId ?? null,
     patch.date,
     patch.miles,
     patch.miles,
+    patch.rate ?? 0.67,
     patch.billable ?? 0,
     NOW,
     NOW
@@ -661,5 +665,28 @@ describe("cash basis", () => {
     const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
     expect(payload.money.due).toBe(0);
     expect(payload.attention.some((item) => item.id === "accounts-payable")).toBe(false);
+  });
+});
+
+describe("per-trip mileage rate", () => {
+  it("values each trip at its own frozen rate and does not round miles first", () => {
+    const db = freshDb();
+    addTrip(db, { date: "2026-08-04", miles: 37.02, billable: 1, rate: 0.7 });
+    addTrip(db, { date: "2026-08-05", miles: 100, billable: 1, rate: 0.655 });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    // 37.02 x 0.70 = 25.914 and 100 x 0.655 = 65.5; rounding miles first gave 25.90.
+    expect(payload.reimbursable.mileageAmount).toBe(91.41);
+    expect(payload.tax.mileageDeduction).toBe(91.41);
+    expect(payload.reimbursable.mileageRate).toBeCloseTo(91.414 / 137.02, 3);
+  });
+
+  it("is unaffected by a later change to the rate setting", () => {
+    const db = freshDb();
+    addTrip(db, { date: "2026-08-04", miles: 100, billable: 1, rate: 0.655 });
+    db.prepare("UPDATE app_settings SET value = '0.9' WHERE key = 'mileage.rate'").run();
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.reimbursable.mileageAmount).toBe(65.5);
   });
 });
