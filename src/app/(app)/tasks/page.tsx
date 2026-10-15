@@ -112,7 +112,7 @@ function startOfToday(): number {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 }
 
-function dueLabel(dueDate: number | null): { text: string; overdue: boolean; today: boolean } {
+function dueLabel(dueDate: number | null, hasTime: boolean | null = true): { text: string; overdue: boolean; today: boolean } {
   if (dueDate === null) return { text: "No due date", overdue: false, today: false };
   const due = new Date(dueDate);
   if (!Number.isFinite(due.getTime())) return { text: "No due date", overdue: false, today: false };
@@ -120,7 +120,10 @@ function dueLabel(dueDate: number | null): { text: string; overdue: boolean; tod
   const days = Math.floor((new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime() - dayStart) / 86_400_000);
   const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(due);
   const date = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", ...(due.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }) }).format(due);
-  if (days === 0) return { text: `Today ${time}`, overdue: dueDate < Date.now(), today: true };
+  // A date-only due date is stamped 04:00; it is due today, not at 4 AM, and not overdue until the day ends.
+  if (days === 0) return hasTime === false
+    ? { text: "Today", overdue: false, today: true }
+    : { text: `Today ${time}`, overdue: dueDate < Date.now(), today: true };
   if (days === 1) return { text: "Tomorrow", overdue: false, today: false };
   if (days === -1) return { text: "Yesterday", overdue: true, today: false };
   return { text: date, overdue: days < 0, today: false };
@@ -303,7 +306,7 @@ export default function TasksPage() {
       <span className={`${styles.status} ${(task.priority || "").toLowerCase() === "urgent" || (task.priority || "").toLowerCase() === "high" ? styles.statusUrgent : ""}`}>{priorityLabel(task.priority)}</span>
     ) },
     { id: "due", label: "Due", sort: "due", render: (task) => {
-      const due = dueLabel(task.dueDate);
+      const due = dueLabel(task.dueDate, task.dueHasTime);
       return <span className={due.overdue ? styles.overdueText : due.today ? styles.primaryCell : undefined}>{due.text}</span>;
     } },
     { id: "assignment", label: "Client / project", render: (task) => task.projectName || task.clientName || <span className={styles.secondaryText}>Unassigned</span> },
@@ -398,7 +401,7 @@ export default function TasksPage() {
             direction={filters.direction}
             onSort={(sort) => patchFilters({ sort, direction: filters.sort === sort && filters.direction === "asc" ? "desc" : "asc" })}
             renderMobile={(task) => {
-              const due = dueLabel(task.dueDate);
+              const due = dueLabel(task.dueDate, task.dueHasTime);
               return (
                 <article className={styles.mobileRow}>
                   <div className={styles.mobileRowHead}>
@@ -454,7 +457,7 @@ export default function TasksPage() {
           <dl className={styles.detailList}>
             <div><dt>Status</dt><dd>{openTask.status || "—"}</dd></div>
             <div><dt>Priority</dt><dd>{priorityLabel(openTask.priority)}</dd></div>
-            <div><dt>Due</dt><dd>{dueLabel(openTask.dueDate).text}</dd></div>
+            <div><dt>Due</dt><dd>{dueLabel(openTask.dueDate, openTask.dueHasTime).text}</dd></div>
             <div><dt>Client</dt><dd>{openTask.clientName || "Unassigned"}</dd></div>
             <div><dt>Project</dt><dd>{openTask.projectName || "Unassigned"}</dd></div>
             <div><dt>Association</dt><dd>{ASSOCIATION_LABELS[openTask.associationSource] ?? openTask.associationSource}</dd></div>

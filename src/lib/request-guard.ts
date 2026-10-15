@@ -1,4 +1,9 @@
-const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "100.119.59.63:3018"];
+const DEFAULT_ALLOWED_HOSTS = [
+  "localhost",
+  "127.0.0.1",
+  "100.119.59.63:3018",
+  "amb-ubuntu-01.tail7a2140.ts.net:3018"
+];
 
 export type RequestGuardDecision =
   | { allowed: true }

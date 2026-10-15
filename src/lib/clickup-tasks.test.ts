@@ -116,3 +116,49 @@ describe("clickup task ledger", () => {
     expect(() => parseClickUpTaskQuery(new URLSearchParams("overdue=maybe"))).toThrow(/true or false/i);
   });
 });
+
+describe("date-only due dates", () => {
+  // NOW is 9:00 AM on Aug 13. ClickUp stamps a date-only due date at 04:00.
+  function overdueIds(search = "overdue=true") {
+    const db = freshDb();
+    replaceCachedClickUpTasks(db, [
+      task({ id: "today-dateonly", name: "Due today, no time", due_date: day(0, 4) }),
+      task({ id: "yesterday-dateonly", name: "Due yesterday, no time", due_date: day(-1, 4) }),
+      task({ id: "today-passed", name: "Due 8 AM today", due_date: day(0, 8) }),
+      task({ id: "today-later", name: "Due 5 PM today", due_date: day(0, 17) }),
+      task({ id: "flagged", name: "Due 4 AM with a time", due_date: day(0, 4), due_date_time: true }),
+      task({ id: "undated", name: "No date", due_date: null })
+    ], NOW);
+    return {
+      db,
+      result: queryClickUpTasks(db, parseClickUpTaskQuery(new URLSearchParams(`${search}&sort=name&direction=asc`)), NOW)
+    };
+  }
+
+  it("is not overdue on its own due day, but is the day after", () => {
+    const { result } = overdueIds();
+    expect(result.items.map((item) => item.id).sort()).toEqual(
+      ["flagged", "today-passed", "yesterday-dateonly"]
+    );
+  });
+
+  it("returns the complement for not-overdue, undated tasks included", () => {
+    const { result } = overdueIds("overdue=false");
+    expect(result.items.map((item) => item.id).sort()).toEqual(["today-dateonly", "today-later", "undated"]);
+  });
+
+  it("counts it as due soon, and counts overdue the same way the filter does", () => {
+    const { result } = overdueIds("sort=due");
+    expect(result.filteredTotals.overdue).toBe(3);
+    expect(result.filteredTotals.dueSoon).toBe(2); // today-dateonly and today-later
+  });
+
+  it("tells the screen which due dates have no time", () => {
+    const { result } = overdueIds("sort=due");
+    const byId = new Map(result.items.map((item) => [item.id, item.dueHasTime]));
+    expect(byId.get("today-dateonly")).toBe(false);
+    expect(byId.get("today-later")).toBe(true);
+    expect(byId.get("flagged")).toBe(true);
+    expect(byId.get("undated")).toBeNull();
+  });
+});

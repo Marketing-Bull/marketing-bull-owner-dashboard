@@ -117,6 +117,16 @@ export async function getClickUpCredentialStatus(): Promise<ClickUpCredentialSta
   };
 }
 
+/**
+ * A ClickUp task, list or space id as it appears in a URL path: letters,
+ * digits, `_` and `-` only ("868kh0y3b", "901113884029", "DEV-1234"). Anything
+ * else (a `/`, `..`, `?`) could steer a request made with the owner's API key
+ * to a different ClickUp endpoint, so ids are checked before they go in a path.
+ */
+export function isClickUpId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+}
+
 export async function fetchClickUpJson<T>(
   path: string,
   params: URLSearchParams,

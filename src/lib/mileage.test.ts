@@ -141,7 +141,8 @@ describe("mileage", () => {
   it("backfills existing trips with the current saved reimbursement rate", () => {
     const db = new DatabaseSync(join(mkdtempSync(join(tmpdir(), "owner-dash-mileage-")), "dash.sqlite"));
     open.push(db);
-    runMigrations(db, DASHBOARD_MIGRATIONS.slice(0, -1));
+    // By id, not "all but the last": later migrations must not break this setup.
+    runMigrations(db, DASHBOARD_MIGRATIONS.filter((migration) => migration.id !== "012-mileage-rate"));
     const now = new Date().toISOString();
     db.prepare("UPDATE app_settings SET value = ?, updated_at = ? WHERE key = 'mileage.rate'").run("0.73", now);
     db.prepare(`INSERT INTO mileage_entries (id,date,miles,total_miles,created_at,updated_at)

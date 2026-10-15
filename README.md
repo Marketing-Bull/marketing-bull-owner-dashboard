@@ -197,9 +197,10 @@ running open has to be said out loud.
 
 The proxy also validates the request Host and rejects cross-origin API writes.
 `OWNER_DASHBOARD_ALLOWED_HOSTS` accepts a comma-separated list of hostnames,
-optionally with ports. Localhost and `127.0.0.1` are always allowed; the current
-Tailscale host is included in the default list. Set this variable when serving
-the app on another hostname.
+optionally with ports. Localhost and `127.0.0.1` are always allowed, and so are
+both live Tailscale addresses (`100.119.59.63:3018` and
+`amb-ubuntu-01.tail7a2140.ts.net:3018`). Set this variable when serving the app
+on another hostname.
 
 **Current posture: said out loud.** The repo commits a `.env` with
 `OWNER_DASHBOARD_ALLOW_UNPROTECTED=1`, by the owner's explicit choice: deploys
@@ -327,7 +328,10 @@ without credentials means the explicit opt-out is active.
   `bottleneck`, with due date and priority still influencing ranking
 
 ### `PATCH /api/tasks/{taskId}`
-- Body: `{ "done": boolean, "listId": string }`
+- Body: `{ "done": boolean }`. Any `listId` sent is ignored: the list is read
+  from the synced task, so the route only acts on a task the app has cached
+  (404 otherwise), and the task id must be a plain ClickUp id (400 otherwise)
+  because both go into a ClickUp URL with the API key
 - Writes a `ClickUp Tasks` checkbox back to ClickUp as a task status change
 - On a successful done write, deletes the task from `clickup_tasks` so the local
   dashboard reflects the closed task before the next scheduled sync
@@ -367,6 +371,11 @@ Currently stores:
 - `app_settings`, including the Settings-managed ClickUp API key
 
 ClickUp tasks are stored as a refreshable cache, not as source-of-truth data.
+A due date set without a time is stamped by ClickUp at 04:00 local; the cache
+records whether each due date has a time (`due_date_time`, from the API's flag
+when sent, else the 04:00 stamp in the host's timezone, so set `TZ` on the
+host). A date-only task is overdue only after its day ends, and shows as
+"Today" rather than "Today 4:00 AM".
 Google Calendar events are not stored in SQLite right now.
 
 ### Daily history
