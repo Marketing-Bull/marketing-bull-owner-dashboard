@@ -62,7 +62,8 @@ The app has 3 data layers:
 
 Ticking a `ClickUp Tasks` checkbox writes the task's status back to ClickUp and
 removes the task from the local cache after a successful close. ClickUp remains
-the source of truth for task status.
+the source of truth for task status. On the Tasks screen, "Mark complete" asks
+for confirmation first, because the app can't reopen a task it has closed.
 
 3. `UI/runtime layer`
 - Persistent sidebar menu (mission-control-style layout: Operate / Track /

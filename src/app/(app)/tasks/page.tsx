@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ExternalLink, ListTodo, RefreshCw, Search } from "lucide-react";
 import { DataTable, type LedgerColumn } from "@/components/transactions/data-table";
+import { DeleteDialog } from "@/components/transactions/delete-dialog";
 import { FilterBar, FilterField, type ActiveFilter } from "@/components/transactions/filter-bar";
 import { RecordSheet } from "@/components/transactions/record-sheet";
 import { TransactionPage, TransactionPageHeader } from "@/components/transactions/transaction-page";
@@ -161,6 +162,9 @@ export default function TasksPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [openTask, setOpenTask] = useState<ClickUpTaskRecord | null>(null);
+  // Marking complete writes to ClickUp and drops the task from this list; this app
+  // can't reopen it, so the action waits for a yes first.
+  const [completeTarget, setCompleteTarget] = useState<ClickUpTaskRecord | null>(null);
   const debouncedSearch = useDebouncedValue(filters.search, 300);
   const debouncedName = useDebouncedValue(filters.name, 300);
   const debouncedTaskType = useDebouncedValue(filters.taskType, 300);
@@ -197,11 +201,16 @@ export default function TasksPage() {
 
   const applyResult = useCallback((json: Record<string, unknown>) => {
     setTasks(Array.isArray(json?.items) ? (json.items as ClickUpTaskRecord[]) : []);
-    setPageInfo((json?.pageInfo as PageInfo) ?? EMPTY_PAGE);
+    const nextPageInfo = (json?.pageInfo as PageInfo) ?? EMPTY_PAGE;
+    setPageInfo(nextPageInfo);
+    // Completing the last task on a later page leaves that page past the end: step back.
+    if (nextPageInfo.totalPages > 0 && filters.page > nextPageInfo.totalPages) {
+      patchFilters({ page: nextPageInfo.totalPages }, true);
+    }
     setTotals((json?.filteredTotals as Totals) ?? EMPTY_TOTALS);
     setFacets((json?.availableFacets as Facets) ?? EMPTY_FACETS);
     setSync((json?.sync as SyncInfo) ?? null);
-  }, []);
+  }, [filters.page, patchFilters]);
 
   const loadTasks = useCallback(async (signal?: AbortSignal) => {
     if (!ready) return;
@@ -243,7 +252,7 @@ export default function TasksPage() {
     }
   }
 
-  async function markComplete(task: ClickUpTaskRecord) {
+  async function markComplete(task: ClickUpTaskRecord): Promise<boolean> {
     setBusy(true); setError(null); setNotice("");
     try {
       const response = await fetch(`/api/tasks/${encodeURIComponent(task.id)}`, {
@@ -251,14 +260,16 @@ export default function TasksPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ done: true, listId: task.listId })
       });
-      if (redirectedToLogin(response)) return;
+      if (redirectedToLogin(response)) return false;
       const json = await response.json().catch(() => null);
       if (!response.ok) throw new Error(json?.error || `Could not complete “${task.name}” in ClickUp.`);
       setNotice(`“${task.name}” marked ${json?.status || "complete"} in ClickUp.`);
       setOpenTask(null);
       await loadTasks();
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -314,7 +325,7 @@ export default function TasksPage() {
     { id: "actions", label: "Actions", align: "right", render: (task) => (
       <div className={styles.rowActions}>
         {task.url ? <a className={styles.iconButton} href={task.url} target="_blank" rel="noreferrer" aria-label={`Open ${task.name} in ClickUp`}><ExternalLink size={15} /></a> : null}
-        <button type="button" className={styles.iconButton} disabled={busy || !task.listId} onClick={() => void markComplete(task)} aria-label={`Mark ${task.name} complete in ClickUp`}><CheckCircle2 size={15} /></button>
+        <button type="button" className={styles.iconButton} disabled={busy || !task.listId} onClick={() => setCompleteTarget(task)} aria-label={`Mark ${task.name} complete in ClickUp`}><CheckCircle2 size={15} /></button>
       </div>
     ) }
   ];
@@ -408,7 +419,7 @@ export default function TasksPage() {
                     <button type="button" className={`${styles.mobileRowTitle} ${styles.linkCell}`} onClick={() => setOpenTask(task)}>{task.name}</button>
                     <div className={styles.rowActions}>
                       {task.url ? <a className={styles.iconButton} href={task.url} target="_blank" rel="noreferrer" aria-label="Open in ClickUp"><ExternalLink size={15} /></a> : null}
-                      <button type="button" className={styles.iconButton} disabled={busy || !task.listId} onClick={() => void markComplete(task)} aria-label="Mark complete in ClickUp"><CheckCircle2 size={15} /></button>
+                      <button type="button" className={styles.iconButton} disabled={busy || !task.listId} onClick={() => setCompleteTarget(task)} aria-label="Mark complete in ClickUp"><CheckCircle2 size={15} /></button>
                     </div>
                   </div>
                   <p className={styles.mobileRowDetails}>{[task.listName, task.spaceName].filter(Boolean).join(" · ") || "No list"}</p>
@@ -448,7 +459,7 @@ export default function TasksPage() {
         onClose={() => setOpenTask(null)}
         footer={<>
           {openTask?.url ? <a className={styles.secondaryButton} href={openTask.url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open in ClickUp</a> : null}
-          <button type="button" className={styles.primaryButton} disabled={busy || !openTask?.listId} onClick={() => { if (openTask) void markComplete(openTask); }}>
+          <button type="button" className={styles.primaryButton} disabled={busy || !openTask?.listId} onClick={() => { if (openTask) setCompleteTarget(openTask); }}>
             {busy ? "Working…" : "Mark complete"}
           </button>
         </>}
@@ -468,6 +479,18 @@ export default function TasksPage() {
           </dl>
         ) : null}
       </RecordSheet>
+      <DeleteDialog
+        open={completeTarget !== null}
+        tone="primary"
+        title="Mark complete in ClickUp?"
+        description={completeTarget ? `“${completeTarget.name}” will be closed in ClickUp and removed from this list. Reopen it in ClickUp if you change your mind.` : ""}
+        confirmLabel="Mark complete"
+        busyLabel="Completing…"
+        busy={busy}
+        error={error}
+        onCancel={() => { setCompleteTarget(null); setError(null); }}
+        onConfirm={async () => { if (completeTarget && await markComplete(completeTarget)) setCompleteTarget(null); }}
+      />
     </TransactionPage>
   );
 }
