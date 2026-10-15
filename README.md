@@ -442,25 +442,29 @@ same disk as the database they protect. One dead disk takes all fifteen copies.
 SQLite stays the system of record. The mirror is a copy — queryable from
 anywhere, and the shape the phase-D2 Supabase sync was always meant to take.
 
-**Where it lives.** The `amb-auto-scheduler` project
-(`dfuhhgguzudkbwsabrjt`, us-east-1), in its own `owner_dashboard` schema
-rather than a project of its own: the Supabase org is on the free plan, which
-caps it at two projects, and both were spoken for. The schema boundary is what
-keeps the arrangement honest — nothing here touches the scheduler's `public`
-tables, and its anon key cannot read a row of this schema.
+**Where it lives.** The dedicated `marketing-bull-owner-dashboard` project
+(`ndfsthkszsechcndobyw`, us-west-2), in an `owner_dashboard` schema. Row-level
+security is on for every table with no policies, and `anon` and `authenticated`
+have no grants, so only the service-role key can read or write it.
+
+*History:* the mirror was first set up inside the `amb-auto-scheduler` project
+(`dfuhhgguzudkbwsabrjt`) because the free plan capped the org at two projects.
+It now has its own project. That earlier schema was never written to by a run
+and is no longer used.
 
 **One-time setup**
 
 1. ~~Apply [`supabase/owner-dashboard-mirror.sql`](supabase/owner-dashboard-mirror.sql)~~
-   — done on 2026-08-14; all mirrored tables exist with RLS enabled. The file is
-   idempotent, so re-running it against a replacement project is safe.
+   — done on 2026-10-15 to `ndfsthkszsechcndobyw`; all 15 mirrored tables exist
+   with RLS enabled. The file is idempotent, so re-running it (after a new
+   migration adds a column, or against a replacement project) is safe.
 2. Add `owner_dashboard` to Project Settings → API → **Exposed schemas**, or
    PostgREST answers `PGRST106` and the script says so in as many words.
 3. Put the credentials somewhere root-owned — the systemd unit, or a file that
    is not this repo. The service-role key is full access to the project:
 
    ```bash
-   SUPABASE_URL=https://dfuhhgguzudkbwsabrjt.supabase.co
+   SUPABASE_URL=https://ndfsthkszsechcndobyw.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=<service role key>
    ```
 
