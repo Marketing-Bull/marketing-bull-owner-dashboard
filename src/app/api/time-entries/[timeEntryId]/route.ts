@@ -32,7 +32,9 @@ export async function PUT(request: Request, context: Context) {
       clientId: input.clientId as string | null | undefined,
       projectId: input.projectId as string | null | undefined,
       billable: input.billable as boolean | undefined,
-      details: input.details as string | undefined
+      details: input.details as string | undefined,
+      startTime: input.startTime as string | null | undefined,
+      endTime: input.endTime as string | null | undefined
     });
     return NextResponse.json({ timeEntry }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

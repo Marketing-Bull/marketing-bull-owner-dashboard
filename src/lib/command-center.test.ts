@@ -22,6 +22,7 @@ import {
   type ClientRollup,
   type ProjectRollup
 } from "@/lib/command-center";
+import { createRecurringExpense } from "@/lib/expenses";
 import { runMigrations } from "@/lib/migrations";
 import { DASHBOARD_MIGRATIONS } from "@/lib/schema";
 
@@ -560,5 +561,37 @@ describe("buildAttention", () => {
     expect(run({ projects: [project({ urgent: true, hours: 0 })] })).toEqual([]);
     const items = run({ projects: [project({ urgent: true, important: true, hours: 0 })] });
     expect(items.find((entry) => entry.id === "focus-untouched")?.count).toBe(1);
+  });
+});
+
+describe("audit fixes: committed MRR and fixed cost", () => {
+  it("counts only retainer clients toward committed MRR and retainer coverage", () => {
+    const db = freshDb();
+    addClient(db, "retainer", { name: "Retainer", mrr: 2000, paymentType: "mrr" });
+    // Switched to hourly but still carrying an old MRR value.
+    addClient(db, "hourly", { name: "Hourly", mrr: 3000, paymentType: "hourly" });
+    addTime(db, { date: "2026-08-04", hours: 20, rate: 150, clientId: "hourly" });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.committedMrr).toBe(2000);
+    const hourly = payload.clients.find((client) => client.id === "hourly");
+    expect(hourly?.retainerCoverage).toBeNull();
+  });
+
+  it("leaves recurring costs that have ended or not started out of fixed monthly cost", () => {
+    const db = freshDb();
+    const base = { category: "Software", frequency: "monthly" as const };
+    createRecurringExpense(db, { ...base, description: "Live", amount: 100, startDate: "2026-01-01" });
+    createRecurringExpense(db, {
+      ...base,
+      description: "Ended",
+      amount: 500,
+      startDate: "2024-01-01",
+      endDate: "2025-06-30"
+    });
+    createRecurringExpense(db, { ...base, description: "Future lease", amount: 2000, startDate: "2027-06-01" });
+
+    const payload = buildCommandCenter(db, { period: "mtd", today: "2026-08-13" });
+    expect(payload.money.fixedMonthlyCost).toBe(100);
   });
 });

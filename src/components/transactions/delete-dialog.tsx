@@ -9,6 +9,7 @@ export function DeleteDialog({
   description,
   confirmLabel,
   busy,
+  error,
   onCancel,
   onConfirm
 }: {
@@ -17,6 +18,8 @@ export function DeleteDialog({
   description: string;
   confirmLabel: string;
   busy: boolean;
+  /** A failed delete, shown in the dialog that covers the page's banner. */
+  error?: string | null;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -38,6 +41,7 @@ export function DeleteDialog({
       <section className={styles.dialog} role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description">
         <h2 id="delete-title">{title}</h2>
         <p id="delete-description">{description}</p>
+        {error ? <p className={styles.dialogError} role="alert">{error}</p> : null}
         <div className={styles.dialogActions}>
           <button ref={cancelRef} type="button" className={styles.secondaryButton} onClick={onCancel} disabled={busy}>Cancel</button>
           <button type="button" className={styles.dangerButton} onClick={onConfirm} disabled={busy}>

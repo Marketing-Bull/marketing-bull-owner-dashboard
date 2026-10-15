@@ -163,3 +163,28 @@ describe("resolveHourlyRate", () => {
     expect(resolveHourlyRate({ hourlyRateOverride: 0 }, client)).toBe(100);
   });
 });
+
+describe("audit fixes: money fields", () => {
+  it("stores formatted amounts instead of erasing them", () => {
+    const db = freshDb();
+    const client = createClient(db, { name: "Acme", mrr: 2500, hourlyRate: 100 });
+    const updated = updateClient(db, client.id, { mrr: "2,750" as unknown as number, hourlyRate: "$150" as unknown as number });
+    expect(updated.mrr).toBe(2750);
+    expect(updated.hourlyRate).toBe(150);
+  });
+
+  it("rejects junk and negatives with a validation error and keeps the stored value", () => {
+    const db = freshDb();
+    const client = createClient(db, { name: "Acme", mrr: 2500 });
+    expect(() => updateClient(db, client.id, { mrr: "abc" as unknown as number })).toThrow(EntityValidationError);
+    expect(() => updateClient(db, client.id, { hourlyRate: -75 })).toThrow(/negative/);
+    expect(getClient(db, client.id)?.mrr).toBe(2500);
+    expect(() => createProject(db, { name: "P", hourlyRateOverride: -1 })).toThrow(EntityValidationError);
+  });
+
+  it("still clears a money field when it is blanked", () => {
+    const db = freshDb();
+    const client = createClient(db, { name: "Acme", mrr: 2500 });
+    expect(updateClient(db, client.id, { mrr: null }).mrr).toBeNull();
+  });
+});

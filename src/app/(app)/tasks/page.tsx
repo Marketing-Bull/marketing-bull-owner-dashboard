@@ -438,7 +438,7 @@ export default function TasksPage() {
         </footer>
       </section>
 
-      <RecordSheet
+      <RecordSheet error={error}
         open={openTask !== null}
         title={openTask?.name ?? "Task"}
         subtitle={openTask ? [openTask.listName, openTask.folderName, openTask.spaceName].filter(Boolean).join(" · ") || "No list" : undefined}

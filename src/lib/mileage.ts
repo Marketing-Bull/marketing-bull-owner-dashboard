@@ -130,9 +130,19 @@ function relationId(value: unknown, label: string): string | null {
   return value.trim() || null;
 }
 
-function resolveRelations(db: DatabaseSync, clientValue: unknown, projectValue: unknown) {
+function resolveRelations(
+  db: DatabaseSync,
+  clientValue: unknown,
+  projectValue: unknown,
+  existing?: { clientId: string | null; projectId: string | null }
+) {
   const requestedClientId = relationId(clientValue, "Client");
   const projectId = relationId(projectValue, "Project");
+  // Unchanged on edit: keep the stored pair even if the project has since
+  // moved to another client, so old rows stay editable.
+  if (existing && requestedClientId === existing.clientId && projectId === existing.projectId) {
+    return { clientId: existing.clientId, projectId: existing.projectId };
+  }
   const project = projectId ? getProject(db, projectId) : null;
   if (projectId && !project) throw new MileageValidationError("That project does not exist.");
   const clientId = requestedClientId ?? project?.clientId ?? null;
@@ -171,7 +181,11 @@ function rowToMileage(row: Row): MileageEntry {
   };
 }
 
-function validated(db: DatabaseSync, input: MileageInput) {
+function validated(
+  db: DatabaseSync,
+  input: MileageInput,
+  existing?: { clientId: string | null; projectId: string | null }
+) {
   const date = text(input.date);
   if (!isDateKey(date)) throw new MileageValidationError("Date must be a real calendar day in YYYY-MM-DD format.");
   const roundTrip = input.roundTrip ?? false;
@@ -180,7 +194,7 @@ function validated(db: DatabaseSync, input: MileageInput) {
     throw new MileageValidationError("Billable must be true or false.");
   }
   return { date, miles: finiteNumber(input.miles, "Miles"), roundTrip, totalMiles,
-    ...resolveRelations(db, input.clientId, input.projectId) };
+    ...resolveRelations(db, input.clientId, input.projectId, existing) };
 }
 
 export function getMileageEntry(db: DatabaseSync, id: string): MileageEntry | null {
@@ -385,7 +399,7 @@ export function updateMileageEntry(db: DatabaseSync, id: string, patch: Partial<
     startPlaceId: patch.startPlaceId === undefined ? existing.startPlaceId : patch.startPlaceId,
     endPlaceId: patch.endPlaceId === undefined ? existing.endPlaceId : patch.endPlaceId
   };
-  const value = validated(db, input);
+  const value = validated(db, input, existing);
   const calculationSource = input.calculationSource === "provider" ? "provider" : "manual";
   db.prepare(`UPDATE mileage_entries SET client_id=?,project_id=?,trip_name=?,date=?,start_address=?,
     end_address=?,purpose=?,miles=?,round_trip=?,total_miles=?,billable=?,notes=?,calculation_source=?,

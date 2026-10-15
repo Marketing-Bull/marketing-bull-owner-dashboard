@@ -229,6 +229,12 @@
   font-size: 13px;
 }
 
+.fieldError {
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .empty {
   color: var(--muted);
   font-size: 14px;
