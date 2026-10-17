@@ -10,6 +10,7 @@ import { RecordSheet } from "@/components/transactions/record-sheet";
 import { TransactionPage, TransactionPageHeader } from "@/components/transactions/transaction-page";
 import styles from "@/components/transactions/transaction-ledger.module.css";
 import { addHoursToTime, formatHours, hoursBetween, isOvernightSpan, MAX_HOURS, parseHoursInput } from "@/lib/hours-input";
+import { billableZeroRateHint } from "@/lib/time-form";
 import type { Client, Project, TimeEntry, TimeEntryRecentDefaults } from "@/lib/types";
 
 type TimeSort = "date" | "hours" | "rate" | "amount" | "details" | "billable" | "startTime" | "endTime" | "createdAt" | "updatedAt";
@@ -237,6 +238,7 @@ function TimeForm({
   // Same wrap rule as hoursBetween: end at or before start runs through midnight.
   const overnight = Boolean(values.startTime && values.endTime) && isOvernightSpan(values.startTime, values.endTime);
   const overnightHours = overnight ? hoursBetween(values.startTime, values.endTime) : null;
+  const zeroRateHint = billableZeroRateHint(values.billable, rate);
   const selectableProjects = projects.filter((project) => !values.clientId || project.clientId === values.clientId || project.id === values.projectId);
 
   return (
@@ -337,6 +339,11 @@ function TimeForm({
         <span>Billable</span>
         <input type="checkbox" checked={values.billable} onChange={(event) => setValues((current) => ({ ...current, billable: event.target.checked }))} />
       </label>
+      {zeroRateHint ? (
+        <p className={`${styles.addressHint} ${styles.spanAll}`} role="status">
+          {zeroRateHint}
+        </p>
+      ) : null}
       <label className={`${styles.sheetField} ${styles.spanAll}`}>
         <span className={styles.fieldLabel}>Details</span>
         <textarea className={styles.textarea} value={values.details} placeholder="What did you work on?" onChange={(event) => setValues((current) => ({ ...current, details: event.target.value }))} />
