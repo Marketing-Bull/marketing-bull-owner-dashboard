@@ -5,14 +5,15 @@
 -- survives the loss of that machine — the daily `VACUUM INTO` snapshots live
 -- on the same disk as the database they protect, which is not a backup.
 --
--- Applied on 2026-08-14 to the `amb-auto-scheduler` project
--- (`dfuhhgguzudkbwsabrjt`), which hosts this schema alongside its own `public`
--- tables because the free plan caps the org at two projects. The schema
--- boundary is the whole isolation story: nothing here references the
--- scheduler's tables, and its anon key has no grant on this schema.
+-- Applied on 2026-10-15 to the dedicated `marketing-bull-owner-dashboard`
+-- project (`ndfsthkszsechcndobyw`). It was first applied on 2026-08-14 inside
+-- the `amb-auto-scheduler` project (`dfuhhgguzudkbwsabrjt`), which is no longer
+-- the target. RLS is on for every table with no policies, and `anon` and
+-- `authenticated` have no grants, so only the service-role key can read it.
 --
 -- Idempotent: re-running it adds nothing and drops nothing, so pointing it at
--- a dedicated project later is a copy-paste.
+-- a replacement project, or re-applying it after a migration adds a column,
+-- is a copy-paste.
 --
 -- Deliberate omissions:
 --   * `clickup_tasks`, `clickup_sync_state`, `mileage_route_cache` — caches,
