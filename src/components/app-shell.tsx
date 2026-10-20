@@ -33,6 +33,7 @@ import {
   Users,
   X
 } from "lucide-react";
+import { WEBSITE_CREDIT_TEXT, WEBSITE_CREDIT_URL } from "@/lib/website-credit";
 import styles from "./app-shell.module.css";
 
 type NavItem = {
@@ -170,6 +171,15 @@ export function AppShell({ version, children }: { version: string; children: Rea
 
       <div className={styles.footer}>
         <span>{version}</span>
+        {/* noreferrer: this app runs on a private address that shouldn't be sent to the site. */}
+        <a
+          className={styles.footerLink}
+          href={WEBSITE_CREDIT_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {WEBSITE_CREDIT_TEXT}
+        </a>
       </div>
     </>
   );
